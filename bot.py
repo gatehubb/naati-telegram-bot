@@ -8,7 +8,6 @@ import threading
 
 # ==================== خودکارسازی نصب مرورگر ====================
 def ensure_playwright_browsers():
-    """اطمینان از دانلود و وجود کرومیوم در مسیر Render"""
     try:
         from playwright.async_api import async_playwright
     except ImportError:
@@ -43,11 +42,15 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), DummyServer)
     server.serve_forever()
 
-# ==================== تنظیمات ====================
+# ==================== تنظیمات و دیتابیس حافظه ====================
 TELEGRAM_TOKEN = "8708901411:AAGerrcWjeVS2CvQ3dHI4NLs6uO8RgE3uDU"
 DEFAULT_LOCATION = "ONLINE"
-
 WAITING_FOR_DATE = 1
+
+# ذخیره درخواست‌های کاربران
+# { chat_id: {"mode": "single/multi/manual", "target_date": "...", "selected_dates": [...], "target_index": int, "last_seats": {}, "cached_dates": [...]} }
+USER_MONITORS = {}
+USER_TEMP_SELECTIONS = {}
 
 def get_main_inline_keyboard():
     keyboard = [
@@ -58,6 +61,17 @@ def get_main_inline_keyboard():
 
 def get_single_main_menu_keyboard():
     keyboard = [
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_mode_selection_keyboard():
+    """دکمه‌های انتخاب حالت تکی و چندتایی کنار هم"""
+    keyboard = [
+        [
+            InlineKeyboardButton("🎯 انتخاب تکی", callback_data="mode_single"),
+            InlineKeyboardButton("☑️ انتخاب چندتایی", callback_data="mode_multi")
+        ],
         [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -86,7 +100,6 @@ class StatusTracker:
             pass
 
     async def delete_status_message(self):
-        """حذف پیام وضعیت پردازش پس از اتمام کار"""
         try:
             await self.message.delete()
         except Exception:
@@ -120,14 +133,12 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
 
         all_dates = []
         try:
-            # گام ۱: باز کردن سایت
             if tracker:
                 await tracker.update("باز کردن سایت NAATI", "in_progress")
             await page.goto("https://www.naati.com.au/test-date/", wait_until="networkidle", timeout=45000)
             if tracker:
                 await tracker.update("باز کردن سایت NAATI", "success")
 
-            # گام ۲: انتخاب نوع آزمون
             if tracker:
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
             selects = page.locator("select")
@@ -137,15 +148,14 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
 
-            # گام ۳: انتخاب زبان
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
+            selects.nth(1)
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "success")
 
-            # گام ۴: استخراج جدول
             if tracker:
                 await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
@@ -194,39 +204,126 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    chat_id = update.effective_chat.id
 
     if query.data == "btn_main":
         await query.message.reply_text("منوی اصلی:", reply_markup=get_main_inline_keyboard())
         return ConversationHandler.END
 
     if query.data == "btn_list":
-        status_msg = await query.message.reply_text("⚙️ **در حال شروع...**", parse_mode="Markdown")
+        status_msg = await query.message.reply_text("⚙️ **در حال دریافت اطلاعات...**", parse_mode="Markdown")
         tracker = StatusTracker(status_msg)
         
         data = await fetch_filtered_naati_dates(tracker)
-
-        # حذف پیام وضعیت پردازش
         await tracker.delete_status_message()
 
-        if data is None:
+        if not data:
             await query.message.reply_text(
-                "❌ عملیات ناموفق بود. می‌توانید دوباره امتحان کنید.",
+                "❌ دریافت اطلاعات ناموفق بود. مجدداً تلاش کنید.",
                 reply_markup=get_single_main_menu_keyboard()
             )
             return ConversationHandler.END
 
-        if len(data) == 0:
-            await query.message.reply_text(
-                "ℹ️ هیچ تاریخ جدیدی در سایت یافت نشد.",
-                reply_markup=get_single_main_menu_keyboard()
-            )
-            return ConversationHandler.END
+        # ذخیره کش تاریخ‌ها برای کاربر
+        context.user_data['cached_dates'] = data
 
         msg = "🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n\n"
-        for item in data:
-            msg += f"📍 مکان: `{item['location']}` | 📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
+        for idx, item in enumerate(data, 1):
+            msg += f"{idx}. 📍 `{item['location']}` | 📅 `{item['date']}` | 💺 **{item['seats']}**\n"
 
-        await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_single_main_menu_keyboard())
+        msg += "\n👇 **لطفاً نحوه انتخاب تاریخ برای پایش را مشخص کنید:**"
+        await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_mode_selection_keyboard())
+        return ConversationHandler.END
+
+    # حالت انتخاب تکی
+    elif query.data == "mode_single":
+        data = context.user_data.get('cached_dates', [])
+        if not data:
+            await query.message.reply_text("اطلاعات منقضی شده، لطفاً دوباره لیست تاریخ‌ها را دریافت کنید.", reply_markup=get_single_main_menu_keyboard())
+            return ConversationHandler.END
+
+        keyboard = []
+        for idx, item in enumerate(data[:6]):  # 6 تاریخ اول
+            keyboard.append([InlineKeyboardButton(f"📅 {item['date']} ({item['seats']})", callback_data=f"select_single_{idx}")])
+        keyboard.append([InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")])
+
+        await query.message.reply_text("🎯 **یک تاریخ را از ۶ مورد اول انتخاب کنید:**", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ConversationHandler.END
+
+    # پردازش انتخاب تکی
+    elif query.data.startswith("select_single_"):
+        idx = int(query.data.split("_")[-1])
+        data = context.user_data.get('cached_dates', [])
+        if idx >= len(data):
+            return ConversationHandler.END
+
+        selected_item = data[idx]
+        USER_MONITORS[chat_id] = {
+            "mode": "single",
+            "target_date": selected_item['date'],
+            "target_index": idx,
+            "location": selected_item['location'],
+            "last_seats": {selected_item['date']: selected_item['seats']},
+            "cached_snapshot": [d['date'] for d in data]  # برای تشخیص تاریخ‌های جدید
+        }
+
+        await query.message.reply_text(
+            f"✅ **پایش تکی فعال شد!**\n\n📅 تاریخ انتخابی: `{selected_item['date']}`\n💺 ظرفیت فعلی: **{selected_item['seats']}**\n\nℹ️ *شرط پایش:* تغییر ظرفیت این تاریخ + باز شدن هرگونه تاریخ جدید در محدوده ۴ سطر بالاتر/پایین‌تر.",
+            parse_mode="Markdown",
+            reply_markup=get_single_main_menu_keyboard()
+        )
+        return ConversationHandler.END
+
+    # حالت انتخاب چندتایی
+    elif query.data == "mode_multi":
+        USER_TEMP_SELECTIONS[chat_id] = set()
+        await render_multi_select_menu(query, context, chat_id)
+        return ConversationHandler.END
+
+    # چگونگی تیک زدن/برداشتن چندتایی
+    elif query.data.startswith("toggle_multi_"):
+        idx = int(query.data.split("_")[-1])
+        selections = USER_TEMP_SELECTIONS.get(chat_id, set())
+
+        if idx in selections:
+            selections.remove(idx)
+        else:
+            if len(selections) >= 4:
+                await query.answer("⚠️ حداکثر می‌توانید ۴ تاریخ را انتخاب کنید!", show_alert=True)
+                return ConversationHandler.END
+            selections.add(idx)
+
+        USER_TEMP_SELECTIONS[chat_id] = selections
+        await render_multi_select_menu(query, context, chat_id, edit=True)
+        return ConversationHandler.END
+
+    # ثبت نهایی چندتایی
+    elif query.data == "submit_multi":
+        selections = USER_TEMP_SELECTIONS.get(chat_id, set())
+        data = context.user_data.get('cached_dates', [])
+
+        if not selections:
+            await query.answer("⚠️ لطفاً حداقل یک تاریخ را انتخاب کنید!", show_alert=True)
+            return ConversationHandler.END
+
+        selected_items = [data[i] for i in selections if i < len(data)]
+        selected_dates = [item['date'] for item in selected_items]
+        last_seats = {item['date']: item['seats'] for item in selected_items}
+
+        USER_MONITORS[chat_id] = {
+            "mode": "multi",
+            "selected_dates": selected_dates,
+            "location": DEFAULT_LOCATION,
+            "last_seats": last_seats
+        }
+
+        dates_str = "\n".join([f"• `{d}`" for d in selected_dates])
+        await query.message.reply_text(
+            f"✅ **پایش چندتایی برای {len(selected_dates)} تاریخ فعال شد:**\n\n{dates_str}\n\nℹ️ *شرط پایش:* اعلام هرگونه تغییر ظرفیت در این موارد.",
+            parse_mode="Markdown",
+            reply_markup=get_single_main_menu_keyboard()
+        )
+        USER_TEMP_SELECTIONS.pop(chat_id, None)
         return ConversationHandler.END
 
     elif query.data == "btn_manual":
@@ -237,49 +334,56 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return WAITING_FOR_DATE
 
+async def render_multi_select_menu(query, context, chat_id, edit=False):
+    data = context.user_data.get('cached_dates', [])
+    selections = USER_TEMP_SELECTIONS.get(chat_id, set())
+
+    keyboard = []
+    for idx, item in enumerate(data[:8]):  # 8 تاریخ اول
+        check = "✅ " if idx in selections else "[ ] "
+        keyboard.append([InlineKeyboardButton(f"{check}{item['date']} ({item['seats']})", callback_data=f"toggle_multi_{idx}")])
+
+    keyboard.append([InlineKeyboardButton(f"📥 ثبت نهایی ({len(selections)}/4)", callback_data="submit_multi")])
+    keyboard.append([InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")])
+
+    text = "☑️ **تاریخ‌های مدنظر را انتخاب کنید (حداکثر ۴ مورد):**"
+    if edit:
+        try:
+            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        except Exception:
+            pass
+    else:
+        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_date = update.message.text
-    target_location = DEFAULT_LOCATION
     chat_id = update.effective_chat.id
 
-    status_msg = await update.message.reply_text("⚙️ **در حال شروع...**", parse_mode="Markdown")
+    status_msg = await update.message.reply_text("⚙️ **در حال بررسی...**", parse_mode="Markdown")
     tracker = StatusTracker(status_msg)
 
     data = await fetch_filtered_naati_dates(tracker)
-
-    # حذف پیام وضعیت پردازش
     await tracker.delete_status_message()
 
-    if data is None:
-        await update.message.reply_text(
-            "❌ عملیات پایش متوقف شد.",
-            reply_markup=get_single_main_menu_keyboard()
-        )
+    if not data:
+        await update.message.reply_text("❌ عملیات پایش متوقف شد.", reply_markup=get_single_main_menu_keyboard())
         return ConversationHandler.END
 
-    found_item = None
-    for item in data:
-        if is_match(target_location, item['location']) and (target_date in item['date'] or is_match(target_date, item['date'])):
-            found_item = item
-            break
-
+    found_item = next((item for item in data if is_match(target_date, item['date'])), None)
     initial_seats = found_item['seats'] if found_item else "یافت نشد"
 
-    if found_item:
-        await update.message.reply_text(
-            f"✅ **تاریخ پیدا شد و پایش فعال گردید!**\n\n📍 مکان: `{found_item['location']}`\n📅 تاریخ: `{found_item['date']}`\n💺 ظرفیت فعلی: **{found_item['seats']}**\n\nربات هر ۵ دقیقه سایت را بررسی می‌کند و **تنها در صورت تغییر ظرفیت** به شما اطلاع می‌دهد.",
-            parse_mode="Markdown",
-            reply_markup=get_single_main_menu_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            f"⚠️ **تاریخ `{target_date}` در حال حاضر در سایت موجود نیست.**\n\nاما پایش خودکار فعال شد! به محض اینکه این تاریخ باز شود، ربات به شما خبر می‌دهد.",
-            parse_mode="Markdown",
-            reply_markup=get_single_main_menu_keyboard()
-        )
+    USER_MONITORS[chat_id] = {
+        "mode": "manual",
+        "target_date": target_date,
+        "location": DEFAULT_LOCATION,
+        "last_seats": {target_date: initial_seats}
+    }
 
-    # شروع پایش مداوم با ارسال ظرفیت اولیه برای مقایسه
-    asyncio.create_task(start_monitoring(chat_id, target_location, target_date, initial_seats, context))
+    await update.message.reply_text(
+        f"✅ **پایش دستی برای تاریخ `{target_date}` فعال شد!**\n\n💺 وضعیت فعلی: **{initial_seats}**",
+        parse_mode="Markdown",
+        reply_markup=get_single_main_menu_keyboard()
+    )
     return ConversationHandler.END
 
 def is_match(user_input, site_text):
@@ -287,31 +391,87 @@ def is_match(user_input, site_text):
     clean_site = re.sub(r'[^a-zA-Z0-9]', '', site_text.lower())
     return clean_user in clean_site or clean_site in clean_user
 
-async def start_monitoring(chat_id, location, date_str, initial_seats, context):
-    last_seats_state = initial_seats  # ذخیره آخرین حالت ظرفیت
-
+# ==================== حلقه عمومی پایش تمام کاربران ====================
+async def global_monitoring_loop(app):
     while True:
-        await asyncio.sleep(300)  # بررسی هر ۵ دقیقه
+        await asyncio.sleep(300)
+
+        if not USER_MONITORS:
+            continue
+
         data = await fetch_filtered_naati_dates()
-        if data:
-            found_item = None
-            for item in data:
-                if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
-                    found_item = item
-                    break
+        if not data:
+            continue
 
-            current_seats = found_item['seats'] if found_item else "یافت نشد/تمام شده"
+        for chat_id, monitor_info in list(USER_MONITORS.items()):
+            mode = monitor_info.get("mode")
 
-            # مقایسه ظرفیت فعلی با ظرفیت نوبت قبل
-            if current_seats != last_seats_state:
-                last_seats_state = current_seats  # به‌روزرسانی آخرین وضعیت
-                
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🔔 **تغییر در وضعیت ظرفیت!**\n\n📍 مکان: {location}\n📅 تاریخ: {date_str}\n💺 وضعیت جدید ظرفیت: **{current_seats}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
-                    parse_mode="Markdown",
-                    reply_markup=get_single_main_menu_keyboard()
-                )
+            # --- ۱. پایش حالت دستی ---
+            if mode == "manual":
+                target_date = monitor_info["target_date"]
+                last_seats = monitor_info["last_seats"].get(target_date, "")
+                found_item = next((item for item in data if is_match(target_date, item['date'])), None)
+                current_seats = found_item['seats'] if found_item else "یافت نشد/تمام شده"
+
+                if current_seats != last_seats:
+                    USER_MONITORS[chat_id]["last_seats"][target_date] = current_seats
+                    await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت (پایش دستی):**\n\n📅 تاریخ: `{target_date}`\n💺 ظرفیت جدید: **{current_seats}**")
+
+            # --- ۲. پایش حالت چندتایی ---
+            elif mode == "multi":
+                selected_dates = monitor_info.get("selected_dates", [])
+                last_seats_dict = monitor_info.get("last_seats", {})
+
+                for s_date in selected_dates:
+                    found_item = next((item for item in data if is_match(s_date, item['date'])), None)
+                    current_seats = found_item['seats'] if found_item else "تمام شده/حذف شده"
+                    old_seats = last_seats_dict.get(s_date, "")
+
+                    if current_seats != old_seats:
+                        USER_MONITORS[chat_id]["last_seats"][s_date] = current_seats
+                        await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت (پایش چندتایی):**\n\n📅 تاریخ: `{s_date}`\n💺 وضعیت جدید: **{current_seats}**")
+
+            # --- ۳. پایش حالت تکی (+4 / -4 سطر) ---
+            elif mode == "single":
+                target_date = monitor_info["target_date"]
+                last_seats = monitor_info["last_seats"].get(target_date, "")
+
+                # پیدا کردن ایندکس فعلی تاریخ انتخابی در جدول جدید
+                current_idx = next((i for i, item in enumerate(data) if is_match(target_date, item['date'])), None)
+
+                # شرط ۱: تغییر ظرفیت خود تاریخ
+                if current_idx is not None:
+                    curr_seats = data[current_idx]['seats']
+                    if curr_seats != last_seats:
+                        USER_MONITORS[chat_id]["last_seats"][target_date] = curr_seats
+                        await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت تاریخ انتخابی:**\n\n📅 تاریخ: `{target_date}`\n💺 ظرفیت جدید: **{curr_seats}**")
+
+                    # شرط ۲: بررسی باز شدن تاریخ‌های جدیدتر در محدوده -4 تا +4 سطر
+                    start_idx = max(0, current_idx - 4)
+                    end_idx = min(len(data), current_idx + 5)
+                    nearby_items = data[start_idx:end_idx]
+
+                    snapshot = monitor_info.get("cached_snapshot", [])
+                    new_found = [item for item in nearby_items if item['date'] not in snapshot]
+
+                    if new_found:
+                        # به‌روزرسانی اسنپ‌شات برای عدم تکرار هشدار
+                        USER_MONITORS[chat_id]["cached_snapshot"].extend([item['date'] for item in new_found])
+                        msg_new = "🔥 **تاریخ جدید در محدوده ±4 سطر یافت شد!**\n\n"
+                        for item in new_found:
+                            msg_new += f"📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
+                        await send_alert(app, chat_id, msg_new)
+
+async def send_alert(app, chat_id, text):
+    try:
+        await app.bot.send_message(
+            chat_id=chat_id,
+            text=f"{text}\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
+            parse_mode="Markdown",
+            reply_markup=get_single_main_menu_keyboard()
+        )
+    except Exception as e:
+        print(f"Alert error: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard())
@@ -339,6 +499,9 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_click))
+
+    loop = asyncio.get_event_loop()
+    loop.create_task(global_monitoring_loop(app))
 
     print("ربات با موفقیت روشن شد...")
     app.run_polling()
