@@ -1,10 +1,10 @@
 import asyncio
 import re
 from playwright.async_api import async_playwright
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, 
-    filters, ConversationHandler, ContextTypes
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
+    MessageHandler, filters, ConversationHandler, ContextTypes
 )
 
 # ==================== تنظیمات ====================
@@ -12,22 +12,23 @@ TELEGRAM_TOKEN = "8708901411:AAEWDd3HcW-oAqyrAhfp4h6fhmLlO88eS-k"
 
 LOCATION, MANUAL_DATE = range(2)
 
-def get_main_keyboard():
+def get_main_inline_keyboard():
     keyboard = [
-        ["📋 انتخاب از تاریخ‌های موجود سایت"],
-        ["✏️ وارد کردن تاریخ به صورت دستی"]
+        [InlineKeyboardButton("📋 انتخاب از تاریخ‌های موجود سایت", callback_data="btn_list")],
+        [InlineKeyboardButton("✏️ وارد کردن تاریخ به صورت دستی", callback_data="btn_manual")]
     ]
-    # is_persistent=True باعث می‌شود کیبورد همیشه باز و ثابت بماند
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+    return InlineKeyboardMarkup(keyboard)
 
-def get_reset_keyboard():
+def get_reset_inline_keyboard():
     keyboard = [
-        ["🔄 ریست و تنظیم مجدد"],
-        ["🔙 بازگشت به منوی اصلی"]
+        [
+            InlineKeyboardButton("🔄 ریست / شروع مجدد", callback_data="btn_reset"),
+            InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")
+        ]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+    return InlineKeyboardMarkup(keyboard)
 
-# تابع هوشمند برای فیلتر کردن سایت NAATI و خواندن جدول به همراه پیام‌های Log
+# تابع هوشمند برای فیلتر کردن سایت NAATI و خواندن جدول
 async def fetch_filtered_naati_dates(status_msg=None):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -87,32 +88,32 @@ async def fetch_filtered_naati_dates(status_msg=None):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! به ربات پایش ظرفیت NAATI (ویژه CCL زبان فارسی) خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
-        reply_markup=get_main_keyboard()
+        reply_markup=get_main_inline_keyboard()
     )
     return ConversationHandler.END
 
-# مدیریت گزینه‌ها و منو
-async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+# کلیک روی دکمه‌های شیشه‌ای منوی اصلی
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    if text in ["🔙 بازگشت به منوی اصلی", "🔄 ریست و تنظیم مجدد"]:
-        await update.message.reply_text("منوی اصلی فراخوانی شد:", reply_markup=get_main_keyboard())
+    if query.data in ["btn_main", "btn_reset"]:
+        await query.message.reply_text("منوی اصلی:", reply_markup=get_main_inline_keyboard())
         return ConversationHandler.END
 
-    if text == "📋 انتخاب از تاریخ‌های موجود سایت":
-        status_msg = await update.message.reply_text("⏳ در حال شروع ارتباط با سرور NAATI...")
+    if query.data == "btn_list":
+        status_msg = await query.message.reply_text("⏳ در حال شروع ارتباط با سرور NAATI...")
         data = await fetch_filtered_naati_dates(status_msg)
         
-        # پاک کردن پیام لاگ موقت
         try:
             await status_msg.delete()
         except Exception:
             pass
 
         if not data:
-            await update.message.reply_text(
+            await query.message.reply_text(
                 "❌ متأسفانه دریافت اطلاعات ناموفق بود. لطفاً دوباره تلاش کنید.",
-                reply_markup=get_reset_keyboard()
+                reply_markup=get_reset_inline_keyboard()
             )
             return
 
@@ -120,56 +121,45 @@ async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for item in data:
             msg += f"📍 مکان: `{item['location']}` | 📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
 
-        await update.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_reset_keyboard())
+        await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_reset_inline_keyboard())
 
-    elif text == "✏️ وارد کردن تاریخ به صورت دستی":
-        await update.message.reply_text(
+    elif query.data == "btn_manual":
+        await query.message.reply_text(
             "مرحله ۱ از ۲:\nلطفاً **مکان آزمون** را وارد کنید.\n(مثال: `ONLINE` یا `Sydney`)",
-            reply_markup=get_reset_keyboard(),
+            reply_markup=get_reset_inline_keyboard(),
             parse_mode="Markdown"
         )
         return LOCATION
 
 async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if text in ["🔙 بازگشت به منوی اصلی", "🔄 ریست و تنظیم مجدد"]:
-        await update.message.reply_text("عملیات لغو شد. منوی اصلی:", reply_markup=get_main_keyboard())
-        return ConversationHandler.END
-
     context.user_data['location'] = text
     await update.message.reply_text(
         "مرحله ۲ از ۲:\nلطفاً **تاریخ مدنظر** را وارد کنید:\n(مثال: `03-09-2026` یا بخشی از تاریخ مثل `September` یا `03`)",
-        reply_markup=get_reset_keyboard(),
+        reply_markup=get_reset_inline_keyboard(),
         parse_mode="Markdown"
     )
     return MANUAL_DATE
 
 async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_date = update.message.text
-    if target_date in ["🔙 بازگشت به منوی اصلی", "🔄 ریست و تنظیم مجدد"]:
-        await update.message.reply_text("عملیات لغو شد. منوی اصلی:", reply_markup=get_main_keyboard())
-        return ConversationHandler.END
-
     target_location = context.user_data.get('location')
     chat_id = update.effective_chat.id
 
     await update.message.reply_text(
         f"✅ **پایش خودکار فعال شد!**\n\n📍 مکان: `{target_location}`\n📅 تاریخ: `{target_date}`\n\nربات هر ۵ دقیقه سایت را چک کرده و تغییرات را اطلاع می‌دهد.",
         parse_mode="Markdown",
-        reply_markup=get_reset_keyboard()
+        reply_markup=get_reset_inline_keyboard()
     )
 
-    # اجرای پایش در پس‌زمینه
     asyncio.create_task(start_monitoring(chat_id, target_location, target_date, context))
     return ConversationHandler.END
 
-# تابع مقایسه انعطاف‌پذیر
 def is_match(user_input, site_text):
     clean_user = re.sub(r'[^a-zA-Z0-9]', '', user_input.lower())
     clean_site = re.sub(r'[^a-zA-Z0-9]', '', site_text.lower())
     return clean_user in clean_site or clean_site in clean_user
 
-# حلقه پایش خودکار با لاگ موقت
 async def start_monitoring(chat_id, location, date_str, context):
     while True:
         status_msg = await context.bot.send_message(
@@ -179,7 +169,6 @@ async def start_monitoring(chat_id, location, date_str, context):
         
         data = await fetch_filtered_naati_dates(status_msg)
         
-        # پاک کردن لاگ بررسی موقت پس از اتمام
         try:
             await status_msg.delete()
         except Exception:
@@ -194,7 +183,7 @@ async def start_monitoring(chat_id, location, date_str, context):
                     chat_id=chat_id,
                     text=f"🔔 **گزارش پایش ظرفیت:**\n\n📍 مکان: {item['location']}\n📅 تاریخ: {item['date']}\n💺 وضعیت ظرفیت: **{seats_str}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
                     parse_mode="Markdown",
-                    reply_markup=get_reset_keyboard()
+                    reply_markup=get_reset_inline_keyboard()
                 )
 
         if not found:
@@ -202,13 +191,13 @@ async def start_monitoring(chat_id, location, date_str, context):
                 chat_id=chat_id,
                 text=f"ℹ️ تاریخ `{date_str}` با مکان `{location}` در لیست حال حاضر سایت پیدا نشد.",
                 parse_mode="Markdown",
-                reply_markup=get_reset_keyboard()
+                reply_markup=get_reset_inline_keyboard()
             )
 
-        await asyncio.sleep(300) # هر ۵ دقیقه
+        await asyncio.sleep(300)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_keyboard())
+    await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard())
     return ConversationHandler.END
 
 def main():
@@ -216,7 +205,7 @@ def main():
 
     conv_handler = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.Regex("^✏️ وارد کردن تاریخ به صورت دستی$"), handle_option)
+            CallbackQueryHandler(button_click, pattern="^btn_manual$")
         ],
         states={
             LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
@@ -224,13 +213,12 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            MessageHandler(filters.Regex("^(🔙 بازگشت به منوی اصلی|🔄 ریست و تنظیم مجدد)$"), start)
+            CallbackQueryHandler(button_click, pattern="^(btn_main|btn_reset)$")
         ],
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("^📋 انتخاب از تاریخ‌های موجود سایت$"), handle_option))
-    app.add_handler(MessageHandler(filters.Regex("^(🔙 بازگشت به منوی اصلی|🔄 ریست و تنظیم مجدد)$"), start))
+    app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(conv_handler)
 
     print("ربات روشن شد...")
