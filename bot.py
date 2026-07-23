@@ -17,14 +17,15 @@ def get_main_keyboard():
         ["📋 انتخاب از تاریخ‌های موجود سایت"],
         ["✏️ وارد کردن تاریخ به صورت دستی"]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    # is_persistent=True باعث می‌شود کیبورد همیشه باز و ثابت بماند
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 def get_reset_keyboard():
     keyboard = [
         ["🔄 ریست و تنظیم مجدد"],
         ["🔙 بازگشت به منوی اصلی"]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 # تابع هوشمند برای فیلتر کردن سایت NAATI و خواندن جدول به همراه پیام‌های Log
 async def fetch_filtered_naati_dates(status_msg=None):
