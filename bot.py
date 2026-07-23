@@ -1,12 +1,27 @@
 import asyncio
 import re
 import os
-
-# تنظیم مسیر مرورگر Playwright برای جلوگیری از خطای نبود مرورگر در Render
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
-
+import sys
+import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
+
+# ==================== خودکارسازی نصب مرورگر ====================
+def ensure_playwright_browsers():
+    """اطمینان از دانلود و وجود کرومیوم در مسیر Render"""
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
+    
+    # نصب خودکار کرومیوم در صورت عدم وجود
+    try:
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        print(f"Playwright install log: {e}")
+
+ensure_playwright_browsers()
+
 from playwright.async_api import async_playwright
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -14,7 +29,7 @@ from telegram.ext import (
     MessageHandler, filters, ConversationHandler, ContextTypes
 )
 
-# سرور ساختگی برای پاسخ به پورت Render
+# سرور ساختگی برای زنده نگه داشتن پورت Render
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -76,26 +91,37 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
         if tracker:
             await tracker.update("راه‌اندازی مرورگر اختصاصی", "in_progress")
         
+        browser = None
         try:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+            browser = await p.chromium.launch(
+                headless=True, 
+                args=[
+                    "--no-sandbox", 
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu"
+                ]
+            )
             page = await browser.new_page()
             if tracker:
                 await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
         except Exception as e:
             if tracker:
                 await tracker.update("راه‌اندازی مرورگر اختصاصی", "failed", str(e))
+            if browser:
+                await browser.close()
             return None
 
         all_dates = []
         try:
-            # مرحله ۱: باز کردن سایت
+            # گام ۱: باز کردن سایت
             if tracker:
                 await tracker.update("باز کردن سایت NAATI", "in_progress")
             await page.goto("https://www.naati.com.au/test-date/", wait_until="networkidle", timeout=45000)
             if tracker:
                 await tracker.update("باز کردن سایت NAATI", "success")
 
-            # مرحله ۲: انتخاب نوع آزمون
+            # گام ۲: انتخاب نوع آزمون
             if tracker:
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
             selects = page.locator("select")
@@ -105,7 +131,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
 
-            # مرحله ۳: انتخاب زبان
+            # گام ۳: انتخاب زبان
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
             await selects.nth(1).select_option(label="Persian")
@@ -113,7 +139,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "success")
 
-            # مرحله ۴: استخراج جدول
+            # گام ۴: استخراج جدول
             if tracker:
                 await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
@@ -148,7 +174,8 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 last_step_text = tracker.steps[-1].replace("⏳ ", "").replace("...", "") if tracker.steps else "پردازش"
                 await tracker.update(last_step_text, "failed", error_details)
-            await browser.close()
+            if browser:
+                await browser.close()
             return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,7 +314,7 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_click))
 
-    print("ربات روشن شد...")
+    print("ربات با موفقیت روشن شد...")
     app.run_polling()
 
 if __name__ == "__main__":
