@@ -205,7 +205,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = await fetch_filtered_naati_dates(tracker)
 
-        # حذف پیام وضعیت پردازش پس از اتمام عملیات
+        # حذف پیام وضعیت پردازش
         await tracker.delete_status_message()
 
         if data is None:
@@ -247,7 +247,7 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     data = await fetch_filtered_naati_dates(tracker)
 
-    # حذف پیام وضعیت پردازش پس از اتمام عملیات
+    # حذف پیام وضعیت پردازش
     await tracker.delete_status_message()
 
     if data is None:
@@ -263,20 +263,23 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
             found_item = item
             break
 
+    initial_seats = found_item['seats'] if found_item else "یافت نشد"
+
     if found_item:
         await update.message.reply_text(
-            f"✅ **تاریخ پیدا شد و پایش فعال گردید!**\n\n📍 مکان: `{found_item['location']}`\n📅 تاریخ: `{found_item['date']}`\n💺 ظرفیت فعلی: **{found_item['seats']}**\n\nربات هر ۵ دقیقه سایت را پایش می‌کند و در صورت تغییر ظرفیت پیام می‌دهد.",
+            f"✅ **تاریخ پیدا شد و پایش فعال گردید!**\n\n📍 مکان: `{found_item['location']}`\n📅 تاریخ: `{found_item['date']}`\n💺 ظرفیت فعلی: **{found_item['seats']}**\n\nربات هر ۵ دقیقه سایت را بررسی می‌کند و **تنها در صورت تغییر ظرفیت** به شما اطلاع می‌دهد.",
             parse_mode="Markdown",
             reply_markup=get_single_main_menu_keyboard()
         )
     else:
         await update.message.reply_text(
-            f"⚠️ **تاریخ `{target_date}` در حال حاضر در سایت موجود نیست.**\n\nاما پایش خودکار فعال شد! به محض اینکه این تاریخ در سایت باز شود، ربات به شما خبر می‌دهد.",
+            f"⚠️ **تاریخ `{target_date}` در حال حاضر در سایت موجود نیست.**\n\nاما پایش خودکار فعال شد! به محض اینکه این تاریخ باز شود، ربات به شما خبر می‌دهد.",
             parse_mode="Markdown",
             reply_markup=get_single_main_menu_keyboard()
         )
 
-    asyncio.create_task(start_monitoring(chat_id, target_location, target_date, context))
+    # شروع پایش مداوم با ارسال ظرفیت اولیه برای مقایسه
+    asyncio.create_task(start_monitoring(chat_id, target_location, target_date, initial_seats, context))
     return ConversationHandler.END
 
 def is_match(user_input, site_text):
@@ -284,20 +287,31 @@ def is_match(user_input, site_text):
     clean_site = re.sub(r'[^a-zA-Z0-9]', '', site_text.lower())
     return clean_user in clean_site or clean_site in clean_user
 
-async def start_monitoring(chat_id, location, date_str, context):
+async def start_monitoring(chat_id, location, date_str, initial_seats, context):
+    last_seats_state = initial_seats  # ذخیره آخرین حالت ظرفیت
+
     while True:
-        await asyncio.sleep(300)
+        await asyncio.sleep(300)  # بررسی هر ۵ دقیقه
         data = await fetch_filtered_naati_dates()
         if data:
+            found_item = None
             for item in data:
                 if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
-                    seats_str = item['seats']
-                    await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"🔔 **گزارش پایش ظرفیت:**\n\n📍 مکان: {item['location']}\n📅 تاریخ: {item['date']}\n💺 وضعیت ظرفیت: **{seats_str}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
-                        parse_mode="Markdown",
-                        reply_markup=get_single_main_menu_keyboard()
-                    )
+                    found_item = item
+                    break
+
+            current_seats = found_item['seats'] if found_item else "یافت نشد/تمام شده"
+
+            # مقایسه ظرفیت فعلی با ظرفیت نوبت قبل
+            if current_seats != last_seats_state:
+                last_seats_state = current_seats  # به‌روزرسانی آخرین وضعیت
+                
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"🔔 **تغییر در وضعیت ظرفیت!**\n\n📍 مکان: {location}\n📅 تاریخ: {date_str}\n💺 وضعیت جدید ظرفیت: **{current_seats}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
+                    parse_mode="Markdown",
+                    reply_markup=get_single_main_menu_keyboard()
+                )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard())
