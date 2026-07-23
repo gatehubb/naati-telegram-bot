@@ -30,7 +30,7 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==================== تنظیمات ====================
-TELEGRAM_TOKEN = "8708901411:AAFgC1yKpO4c6qagT3CH4EtzgFCQRgKN8s0"
+TELEGRAM_TOKEN = "8708901411:AAGCAz5Kktz38rarxw1ht-dd-syYphb5nco"
 DEFAULT_LOCATION = "ONLINE"
 
 WAITING_FOR_DATE = 1
