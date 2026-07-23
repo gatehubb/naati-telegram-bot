@@ -1,6 +1,10 @@
 import asyncio
 import re
 import os
+
+# تنظیم مسیر مرورگر Playwright برای جلوگیری از خطای نبود مرورگر در Render
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 from playwright.async_api import async_playwright
@@ -10,7 +14,7 @@ from telegram.ext import (
     MessageHandler, filters, ConversationHandler, ContextTypes
 )
 
-# سرور ساختگی برای پاسخ به پورت Render (پلن رایگان)
+# سرور ساختگی برای پاسخ به پورت Render
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -38,12 +42,9 @@ def get_main_inline_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-def get_reset_inline_keyboard():
+def get_single_main_menu_keyboard():
     keyboard = [
-        [
-            InlineKeyboardButton("🔄 ریست / شروع مجدد", callback_data="btn_reset"),
-            InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")
-        ]
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -53,9 +54,6 @@ class StatusTracker:
         self.steps = []
 
     async def update(self, step_text, status="in_progress", error_msg=None):
-        """
-        status: 'in_progress', 'success', 'failed'
-        """
         if status == "in_progress":
             self.steps.append(f"⏳ {step_text}...")
         elif status == "success":
@@ -164,7 +162,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data in ["btn_main", "btn_reset"]:
+    if query.data == "btn_main":
         await query.message.reply_text("منوی اصلی:", reply_markup=get_main_inline_keyboard())
         return ConversationHandler.END
 
@@ -177,25 +175,28 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data is None:
             await query.message.reply_text(
                 "❌ عملیات ناموفق بود. می‌توانید دوباره امتحان کنید.",
-                reply_markup=get_reset_inline_keyboard()
+                reply_markup=get_single_main_menu_keyboard()
             )
             return ConversationHandler.END
 
         if len(data) == 0:
-            await query.message.reply_text("ℹ️ هیچ تاریخ جدیدی در سایت یافت نشد.")
+            await query.message.reply_text(
+                "ℹ️ هیچ تاریخ جدیدی در سایت یافت نشد.",
+                reply_markup=get_single_main_menu_keyboard()
+            )
             return ConversationHandler.END
 
         msg = "🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n\n"
         for item in data:
             msg += f"📍 مکان: `{item['location']}` | 📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
 
-        await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_reset_inline_keyboard())
+        await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_single_main_menu_keyboard())
         return ConversationHandler.END
 
     elif query.data == "btn_manual":
         await query.message.reply_text(
             f"📍 مکان آزمون به صورت پیش‌فرض **{DEFAULT_LOCATION}** در نظر گرفته شد.\n\nلطفاً **تاریخ مدنظر** را وارد کنید:\n(مثال: `03-09-2026` یا بخشی از تاریخ مثل `September` یا `03`)",
-            reply_markup=get_reset_inline_keyboard(),
+            reply_markup=get_single_main_menu_keyboard(),
             parse_mode="Markdown"
         )
         return WAITING_FOR_DATE
@@ -213,7 +214,7 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if data is None:
         await update.message.reply_text(
             "❌ عملیات پایش متوقف شد.",
-            reply_markup=get_reset_inline_keyboard()
+            reply_markup=get_single_main_menu_keyboard()
         )
         return ConversationHandler.END
 
@@ -227,13 +228,13 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(
             f"✅ **تاریخ پیدا شد و پایش فعال گردید!**\n\n📍 مکان: `{found_item['location']}`\n📅 تاریخ: `{found_item['date']}`\n💺 ظرفیت فعلی: **{found_item['seats']}**\n\nربات هر ۵ دقیقه سایت را پایش می‌کند و در صورت تغییر ظرفیت پیام می‌دهد.",
             parse_mode="Markdown",
-            reply_markup=get_reset_inline_keyboard()
+            reply_markup=get_single_main_menu_keyboard()
         )
     else:
         await update.message.reply_text(
             f"⚠️ **تاریخ `{target_date}` در حال حاضر در سایت موجود نیست.**\n\nاما پایش خودکار فعال شد! به محض اینکه این تاریخ در سایت باز شود، ربات به شما خبر می‌دهد.",
             parse_mode="Markdown",
-            reply_markup=get_reset_inline_keyboard()
+            reply_markup=get_single_main_menu_keyboard()
         )
 
     asyncio.create_task(start_monitoring(chat_id, target_location, target_date, context))
@@ -256,7 +257,7 @@ async def start_monitoring(chat_id, location, date_str, context):
                         chat_id=chat_id,
                         text=f"🔔 **گزارش پایش ظرفیت:**\n\n📍 مکان: {item['location']}\n📅 تاریخ: {item['date']}\n💺 وضعیت ظرفیت: **{seats_str}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
                         parse_mode="Markdown",
-                        reply_markup=get_reset_inline_keyboard()
+                        reply_markup=get_single_main_menu_keyboard()
                     )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +278,7 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
-            CallbackQueryHandler(button_click, pattern="^(btn_main|btn_reset)$")
+            CallbackQueryHandler(button_click, pattern="^btn_main$")
         ],
         allow_reentry=True
     )
