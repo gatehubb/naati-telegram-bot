@@ -14,7 +14,6 @@ def ensure_playwright_browsers():
     except ImportError:
         subprocess.run([sys.executable, "-m", "pip", "install", "playwright"], check=True)
     
-    # نصب خودکار کرومیوم در صورت عدم وجود
     try:
         subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
     except Exception as e:
@@ -83,6 +82,13 @@ class StatusTracker:
         full_text = "⚙️ **وضعیت پردازش:**\n\n" + "\n".join(self.steps)
         try:
             await self.message.edit_text(full_text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+    async def delete_status_message(self):
+        """حذف پیام وضعیت پردازش پس از اتمام کار"""
+        try:
+            await self.message.delete()
         except Exception:
             pass
 
@@ -199,6 +205,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         data = await fetch_filtered_naati_dates(tracker)
 
+        # حذف پیام وضعیت پردازش پس از اتمام عملیات
+        await tracker.delete_status_message()
+
         if data is None:
             await query.message.reply_text(
                 "❌ عملیات ناموفق بود. می‌توانید دوباره امتحان کنید.",
@@ -237,6 +246,9 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tracker = StatusTracker(status_msg)
 
     data = await fetch_filtered_naati_dates(tracker)
+
+    # حذف پیام وضعیت پردازش پس از اتمام عملیات
+    await tracker.delete_status_message()
 
     if data is None:
         await update.message.reply_text(
