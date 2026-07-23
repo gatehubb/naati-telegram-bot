@@ -10,7 +10,7 @@ from telegram.ext import (
     MessageHandler, filters, ConversationHandler, ContextTypes
 )
 
-# سرور ساختگی برای دادن پاسخ پورت به Render (پلن رایگان)
+# سرور ساختگی برای پاسخ به پورت Render (پلن رایگان)
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -18,7 +18,7 @@ class DummyServer(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is alive!")
 
     def log_message(self, format, *args):
-        return  # خاموش کردن لاگ‌های اضافی سرور وب
+        return
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -47,35 +47,77 @@ def get_reset_inline_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-async def fetch_filtered_naati_dates(status_msg=None):
+class StatusTracker:
+    def __init__(self, message):
+        self.message = message
+        self.steps = []
+
+    async def update(self, step_text, status="in_progress", error_msg=None):
+        """
+        status: 'in_progress', 'success', 'failed'
+        """
+        if status == "in_progress":
+            self.steps.append(f"⏳ {step_text}...")
+        elif status == "success":
+            if self.steps:
+                self.steps[-1] = f"✅ {step_text}"
+        elif status == "failed":
+            if self.steps:
+                self.steps[-1] = f"❌ {step_text}"
+            if error_msg:
+                self.steps.append(f"\n⚠️ **علت خطا:**\n`{error_msg[:200]}`")
+
+        full_text = "⚙️ **وضعیت پردازش:**\n\n" + "\n".join(self.steps)
+        try:
+            await self.message.edit_text(full_text, parse_mode="Markdown")
+        except Exception:
+            pass
+
+async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
-        page = await browser.new_page()
+        if tracker:
+            await tracker.update("راه‌اندازی مرورگر اختصاصی", "in_progress")
+        
+        try:
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+            page = await browser.new_page()
+            if tracker:
+                await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
+        except Exception as e:
+            if tracker:
+                await tracker.update("راه‌اندازی مرورگر اختصاصی", "failed", str(e))
+            return None
 
         all_dates = []
         try:
-            if status_msg:
-                await status_msg.edit_text("⏳ [۱/۴] در حال باز کردن سایت NAATI...")
-            
+            # مرحله ۱: باز کردن سایت
+            if tracker:
+                await tracker.update("باز کردن سایت NAATI", "in_progress")
             await page.goto("https://www.naati.com.au/test-date/", wait_until="networkidle", timeout=45000)
+            if tracker:
+                await tracker.update("باز کردن سایت NAATI", "success")
 
-            if status_msg:
-                await status_msg.edit_text("🔍 [۲/۴] انتخاب نوع آزمون (CCL Test)...")
-            
+            # مرحله ۲: انتخاب نوع آزمون
+            if tracker:
+                await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
             selects = page.locator("select")
             await selects.nth(0).wait_for(timeout=10000)
             await selects.nth(0).select_option(label="Credentialed Community Language Test")
             await page.wait_for_timeout(1000)
+            if tracker:
+                await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
 
-            if status_msg:
-                await status_msg.edit_text("🇮🇷 [۳/۴] انتخاب زبان (Persian)...")
-            
+            # مرحله ۳: انتخاب زبان
+            if tracker:
+                await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
+            if tracker:
+                await tracker.update("اعمال فیلتر زبان (Persian)", "success")
 
-            if status_msg:
-                await status_msg.edit_text("📊 [۴/۴] در حال استخراج و تحلیل جدول...")
-
+            # مرحله ۴: استخراج جدول
+            if tracker:
+                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
             
@@ -96,12 +138,21 @@ async def fetch_filtered_naati_dates(status_msg=None):
                         "seats": seats
                     })
             
+            if tracker:
+                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "success")
+            
             await browser.close()
             return all_dates
+
         except Exception as e:
-            print(f"Error fetching data: {e}")
+            error_details = str(e)
+            print(f"Error fetching data: {error_details}")
+            if tracker:
+                # مرحله فعلی که خراب شده را پیدا کرده و با ضربدر گزارش می‌دهد
+                last_step_text = tracker.steps[-1].replace("⏳ ", "").replace("...", "") if tracker.steps else "پردازش"
+                await tracker.update(last_step_text, "failed", error_details)
             await browser.close()
-            return []
+            return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -119,19 +170,20 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if query.data == "btn_list":
-        status_msg = await query.message.reply_text("⏳ شروع فرایند...")
-        data = await fetch_filtered_naati_dates(status_msg)
+        status_msg = await query.message.reply_text("⚙️ **در حال شروع...**", parse_mode="Markdown")
+        tracker = StatusTracker(status_msg)
         
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
+        data = await fetch_filtered_naati_dates(tracker)
 
-        if not data:
+        if data is None:
             await query.message.reply_text(
-                "❌ متأسفانه دریافت اطلاعات ناموفق بود یا ظرفیتی یافت نشد. لطفاً دوباره تلاش کنید.",
+                "❌ عملیات ناموفق بود. می‌توانید دوباره امتحان کنید.",
                 reply_markup=get_reset_inline_keyboard()
             )
+            return
+
+        if len(data) == 0:
+            await query.message.reply_text("ℹ️ هیچ تاریخ جدیدی در سایت یافت نشد.")
             return
 
         msg = "🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n\n"
@@ -153,14 +205,17 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_location = DEFAULT_LOCATION
     chat_id = update.effective_chat.id
 
-    status_msg = await update.message.reply_text("🔎 در حال بررسی اولیه تاریخ وارد شده در سایت...")
-    
-    data = await fetch_filtered_naati_dates(status_msg)
-    
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
+    status_msg = await update.message.reply_text("⚙️ **در حال شروع...**", parse_mode="Markdown")
+    tracker = StatusTracker(status_msg)
+
+    data = await fetch_filtered_naati_dates(tracker)
+
+    if data is None:
+        await query.message.reply_text(
+            "❌ عملیات پایش متوقف شد.",
+            reply_markup=get_reset_inline_keyboard()
+        )
+        return ConversationHandler.END
 
     found_item = None
     for item in data:
@@ -193,22 +248,22 @@ async def start_monitoring(chat_id, location, date_str, context):
     while True:
         await asyncio.sleep(300)
         data = await fetch_filtered_naati_dates()
-        for item in data:
-            if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
-                seats_str = item['seats']
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"🔔 **گزارش پایش ظرفیت:**\n\n📍 مکان: {item['location']}\n📅 تاریخ: {item['date']}\n💺 وضعیت ظرفیت: **{seats_str}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
-                    parse_mode="Markdown",
-                    reply_markup=get_reset_inline_keyboard()
-                )
+        if data:
+            for item in data:
+                if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
+                    seats_str = item['seats']
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🔔 **گزارش پایش ظرفیت:**\n\n📍 مکان: {item['location']}\n📅 تاریخ: {item['date']}\n💺 وضعیت ظرفیت: **{seats_str}**\n\n🔗 [ثبت نام در سایت NAATI](https://www.naati.com.au/test-date/)",
+                        parse_mode="Markdown",
+                        reply_markup=get_reset_inline_keyboard()
+                    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard())
     return ConversationHandler.END
 
 def main():
-    # شروع سرور پورت رایگان
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
