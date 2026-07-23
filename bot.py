@@ -10,12 +10,15 @@ from telegram.ext import (
     MessageHandler, filters, ConversationHandler, ContextTypes
 )
 
-# ایجاد یک سرور ساختگی برای پاسخ به Render
+# سرور ساختگی برای دادن پاسخ پورت به Render (پلن رایگان)
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        return  # خاموش کردن لاگ‌های اضافی سرور وب
 
 def run_dummy_server():
     port = int(os.environ.get("PORT", 8080))
@@ -23,7 +26,7 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==================== تنظیمات ====================
-TELEGRAM_TOKEN = "8708901411:AAEAjdre8IXm9Ior8_KaZTJ8V1ajVN4Fdlk"
+TELEGRAM_TOKEN = "8708901411:AAEWDd3HcW-oAqyrAhfp4h6fhmLlO88eS-k"
 DEFAULT_LOCATION = "ONLINE"
 
 MANUAL_DATE = 0
@@ -205,7 +208,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 def main():
-    # اجرای سرور ساختگی برای تایید Render
+    # شروع سرور پورت رایگان
     threading.Thread(target=run_dummy_server, daemon=True).start()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
