@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: naati-telegram-bot
+    env: python
+    buildCommand: pip install -r requirements.txt && playwright install chromium && playwright install-deps
+    startCommand: python bot.py
+    envVars:
+      - key: PORT
+        value: 8080
