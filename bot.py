@@ -48,7 +48,7 @@ DEFAULT_LOCATION = "ONLINE"
 WAITING_FOR_DATE = 1
 
 # ذخیره درخواست‌های کاربران
-# { chat_id: {"mode": "single/multi/manual", "target_date": "...", "selected_dates": [...], "target_index": int, "last_seats": {}, "cached_dates": [...]} }
+# { chat_id: {"mode": "single/multi/manual", "target_date": "...", "selected_dates": [...], "target_index": int, "last_seats": {}, "cached_snapshot": [...]} }
 USER_MONITORS = {}
 USER_TEMP_SELECTIONS = {}
 
@@ -150,7 +150,6 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
 
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
-            selects.nth(1)
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
@@ -455,7 +454,6 @@ async def global_monitoring_loop(app):
                     new_found = [item for item in nearby_items if item['date'] not in snapshot]
 
                     if new_found:
-                        # به‌روزرسانی اسنپ‌شات برای عدم تکرار هشدار
                         USER_MONITORS[chat_id]["cached_snapshot"].extend([item['date'] for item in new_found])
                         msg_new = "🔥 **تاریخ جدید در محدوده ±4 سطر یافت شد!**\n\n"
                         for item in new_found:
@@ -500,7 +498,13 @@ def main():
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(button_click))
 
-    loop = asyncio.get_event_loop()
+    # ==================== مدیریت ایونت‌لوپ برای جلوگیری از خطای Render ====================
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     loop.create_task(global_monitoring_loop(app))
 
     print("ربات با موفقیت روشن شد...")
