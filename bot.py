@@ -29,43 +29,35 @@ def get_reset_inline_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# تابع سریع و بهینه‌شده برای فیلتر کردن سایت NAATI
+# تابع پایدار و گزارش‌دهنده وضعیت (Log)
 async def fetch_filtered_naati_dates(status_msg=None):
     async with async_playwright() as p:
-        # متصل شدن با حالت بی‌سر و سریع
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-        page = await context.new_page()
-
-        # مسدود کردن بارگیری تصاویر و فونت‌ها برای افزایش سرعت ۵ برابری
-        await page.route("**/*.{png,jpg,jpeg,svg,woff,woff2,css}", lambda route: route.abort())
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
+        page = await browser.new_page()
 
         all_dates = []
         try:
             if status_msg:
-                await status_msg.edit_text("⏳ [۱/۳] در حال باز کردن سایت NAATI...")
+                await status_msg.edit_text("⏳ [۱/۴] در حال باز کردن سایت NAATI...")
             
-            # لود سریع بدون منتظر ماندن برای فونت‌ها و فایل‌های سنگین
-            await page.goto("https://www.naati.com.au/test-date/", wait_until="domcontentloaded", timeout=30000)
-            await page.wait_for_selector("select", timeout=15000)
+            await page.goto("https://www.naati.com.au/test-date/", wait_until="networkidle", timeout=45000)
 
             if status_msg:
-                await status_msg.edit_text("🔍 [۲/۳] در حال اعمال فیلتر (CCL Test و زبان فارسی)...")
+                await status_msg.edit_text("🔍 [۲/۴] انتخاب نوع آزمون (CCL Test)...")
             
-            # انتخاب آزمون CCL
-            test_type_select = page.locator("select").nth(0)
-            if await test_type_select.is_visible():
-                await test_type_select.select_option(label="Credentialed Community Language Test")
-                await page.wait_for_timeout(500)
-
-            # انتخاب زبان فارسی
-            lang_select = page.locator("select").nth(1)
-            if await lang_select.is_visible():
-                await lang_select.select_option(label="Persian")
-                await page.wait_for_timeout(800)
+            selects = page.locator("select")
+            await selects.nth(0).wait_for(timeout=10000)
+            await selects.nth(0).select_option(label="Credentialed Community Language Test")
+            await page.wait_for_timeout(1000)
 
             if status_msg:
-                await status_msg.edit_text("📊 [۳/۳] در حال استخراج جدول تاریخ‌ها...")
+                await status_msg.edit_text("🇮🇷 [۳/۴] انتخاب زبان (Persian)...")
+            
+            await selects.nth(1).select_option(label="Persian")
+            await page.wait_for_timeout(1500)
+
+            if status_msg:
+                await status_msg.edit_text("📊 [۴/۴] در حال استخراج و تحلیل جدول...")
 
             await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
@@ -112,7 +104,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     if query.data == "btn_list":
-        status_msg = await query.message.reply_text("⏳ در حال شروع ارتباط با سرور NAATI...")
+        status_msg = await query.message.reply_text("⏳ شروع فرایند...")
         data = await fetch_filtered_naati_dates(status_msg)
         
         try:
@@ -146,11 +138,34 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_location = DEFAULT_LOCATION
     chat_id = update.effective_chat.id
 
-    await update.message.reply_text(
-        f"✅ **پایش خودکار فعال شد!**\n\n📍 مکان: `{target_location}`\n📅 تاریخ: `{target_date}`\n\nربات هر ۵ دقیقه سایت را چک کرده و در صورت وجود ظرفیت اطلاع می‌دهد.",
-        parse_mode="Markdown",
-        reply_markup=get_reset_inline_keyboard()
-    )
+    status_msg = await update.message.reply_text("🔎 در حال بررسی اولیه تاریخ وارد شده در سایت...")
+    
+    # تست اولیه بلافاصله پس از دریافت تاریخ
+    data = await fetch_filtered_naati_dates(status_msg)
+    
+    try:
+        await status_msg.delete()
+    except Exception:
+        pass
+
+    found_item = None
+    for item in data:
+        if is_match(target_location, item['location']) and (target_date in item['date'] or is_match(target_date, item['date'])):
+            found_item = item
+            break
+
+    if found_item:
+        await update.message.reply_text(
+            f"✅ **تاریخ پیدا شد و پایش فعال گردید!**\n\n📍 مکان: `{found_item['location']}`\n📅 تاریخ: `{found_item['date']}`\n💺 ظرفیت فعلی: **{found_item['seats']}**\n\nربات هر ۵ دقیقه سایت را پایش می‌کند و در صورت تغییر ظرفیت پیام می‌دهد.",
+            parse_mode="Markdown",
+            reply_markup=get_reset_inline_keyboard()
+        )
+    else:
+        await update.message.reply_text(
+            f"⚠️ **تاریخ `{target_date}` در حال حاضر در سایت موجود نیست.**\n\nاما پایش خودکار فعال شد! به محض اینکه این تاریخ در سایت باز شود، ربات به شما خبر می‌دهد.",
+            parse_mode="Markdown",
+            reply_markup=get_reset_inline_keyboard()
+        )
 
     asyncio.create_task(start_monitoring(chat_id, target_location, target_date, context))
     return ConversationHandler.END
@@ -162,22 +177,10 @@ def is_match(user_input, site_text):
 
 async def start_monitoring(chat_id, location, date_str, context):
     while True:
-        status_msg = await context.bot.send_message(
-            chat_id=chat_id, 
-            text="🔄 در حال بررسی وضعیت ظرفیت NAATI..."
-        )
-        
-        data = await fetch_filtered_naati_dates(status_msg)
-        
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
-
-        found = False
+        await asyncio.sleep(300) # هر ۵ دقیقه بررسی مجدد
+        data = await fetch_filtered_naati_dates()
         for item in data:
             if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
-                found = True
                 seats_str = item['seats']
                 await context.bot.send_message(
                     chat_id=chat_id,
@@ -185,16 +188,6 @@ async def start_monitoring(chat_id, location, date_str, context):
                     parse_mode="Markdown",
                     reply_markup=get_reset_inline_keyboard()
                 )
-
-        if not found:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"ℹ️ تاریخ `{date_str}` در لیست حال حاضر سایت پیدا نشد.",
-                parse_mode="Markdown",
-                reply_markup=get_reset_inline_keyboard()
-            )
-
-        await asyncio.sleep(300)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard())
