@@ -29,7 +29,7 @@ def run_dummy_server():
 TELEGRAM_TOKEN = "8708901411:AAEAjdre8IXm9Ior8_KaZTJ8V1ajVN4Fdlk"
 DEFAULT_LOCATION = "ONLINE"
 
-MANUAL_DATE = 0
+WAITING_FOR_DATE = 1
 
 def get_main_inline_keyboard():
     keyboard = [
@@ -148,7 +148,6 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             error_details = str(e)
             print(f"Error fetching data: {error_details}")
             if tracker:
-                # مرحله فعلی که خراب شده را پیدا کرده و با ضربدر گزارش می‌دهد
                 last_step_text = tracker.steps[-1].replace("⏳ ", "").replace("...", "") if tracker.steps else "پردازش"
                 await tracker.update(last_step_text, "failed", error_details)
             await browser.close()
@@ -180,17 +179,18 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ عملیات ناموفق بود. می‌توانید دوباره امتحان کنید.",
                 reply_markup=get_reset_inline_keyboard()
             )
-            return
+            return ConversationHandler.END
 
         if len(data) == 0:
             await query.message.reply_text("ℹ️ هیچ تاریخ جدیدی در سایت یافت نشد.")
-            return
+            return ConversationHandler.END
 
         msg = "🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n\n"
         for item in data:
             msg += f"📍 مکان: `{item['location']}` | 📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
 
         await query.message.reply_text(msg, parse_mode="Markdown", reply_markup=get_reset_inline_keyboard())
+        return ConversationHandler.END
 
     elif query.data == "btn_manual":
         await query.message.reply_text(
@@ -198,7 +198,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_reset_inline_keyboard(),
             parse_mode="Markdown"
         )
-        return MANUAL_DATE
+        return WAITING_FOR_DATE
 
 async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_date = update.message.text
@@ -211,7 +211,7 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     data = await fetch_filtered_naati_dates(tracker)
 
     if data is None:
-        await query.message.reply_text(
+        await update.message.reply_text(
             "❌ عملیات پایش متوقف شد.",
             reply_markup=get_reset_inline_keyboard()
         )
@@ -273,17 +273,18 @@ def main():
             CallbackQueryHandler(button_click, pattern="^btn_manual$")
         ],
         states={
-            MANUAL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date_and_start)],
+            WAITING_FOR_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date_and_start)],
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
             CallbackQueryHandler(button_click, pattern="^(btn_main|btn_reset)$")
         ],
+        allow_reentry=True
     )
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_click))
     app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(button_click))
 
     print("ربات روشن شد...")
     app.run_polling()
