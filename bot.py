@@ -9,8 +9,9 @@ from telegram.ext import (
 
 # ==================== تنظیمات ====================
 TELEGRAM_TOKEN = "8708901411:AAEWDd3HcW-oAqyrAhfp4h6fhmLlO88eS-k"
+DEFAULT_LOCATION = "ONLINE"
 
-LOCATION, MANUAL_DATE = range(2)
+MANUAL_DATE = 0
 
 def get_main_inline_keyboard():
     keyboard = [
@@ -28,36 +29,45 @@ def get_reset_inline_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# تابع هوشمند برای فیلتر کردن سایت NAATI و خواندن جدول
+# تابع سریع و بهینه‌شده برای فیلتر کردن سایت NAATI
 async def fetch_filtered_naati_dates(status_msg=None):
     async with async_playwright() as p:
+        # متصل شدن با حالت بی‌سر و سریع
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        page = await context.new_page()
+
+        # مسدود کردن بارگیری تصاویر و فونت‌ها برای افزایش سرعت ۵ برابری
+        await page.route("**/*.{png,jpg,jpeg,svg,woff,woff2,css}", lambda route: route.abort())
+
         all_dates = []
         try:
             if status_msg:
-                await status_msg.edit_text("⏳ [۱/۴] در حال باز کردن سایت NAATI...")
-            await page.goto("https://www.naati.com.au/test-date/", timeout=60000)
-            await page.wait_for_selector("table", timeout=20000)
+                await status_msg.edit_text("⏳ [۱/۳] در حال باز کردن سایت NAATI...")
+            
+            # لود سریع بدون منتظر ماندن برای فونت‌ها و فایل‌های سنگین
+            await page.goto("https://www.naati.com.au/test-date/", wait_until="domcontentloaded", timeout=30000)
+            await page.wait_for_selector("select", timeout=15000)
 
             if status_msg:
-                await status_msg.edit_text("🔍 [۲/۴] در حال اعمال فیلتر (CCL Test)...")
+                await status_msg.edit_text("🔍 [۲/۳] در حال اعمال فیلتر (CCL Test و زبان فارسی)...")
+            
+            # انتخاب آزمون CCL
             test_type_select = page.locator("select").nth(0)
             if await test_type_select.is_visible():
                 await test_type_select.select_option(label="Credentialed Community Language Test")
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(500)
 
-            if status_msg:
-                await status_msg.edit_text("🇮🇷 [۳/۴] در حال اعمال فیلتر زبان فارسی (Persian)...")
+            # انتخاب زبان فارسی
             lang_select = page.locator("select").nth(1)
             if await lang_select.is_visible():
                 await lang_select.select_option(label="Persian")
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(800)
 
             if status_msg:
-                await status_msg.edit_text("📊 [۴/۴] در حال استخراج و تحلیل جدول تاریخ‌ها...")
+                await status_msg.edit_text("📊 [۳/۳] در حال استخراج جدول تاریخ‌ها...")
 
-            await page.wait_for_selector("table tbody tr", timeout=15000)
+            await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
             
             for row in rows:
@@ -92,7 +102,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# کلیک روی دکمه‌های شیشه‌ای منوی اصلی
+# کلیک روی دکمه‌های شیشه‌ای
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -112,7 +122,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not data:
             await query.message.reply_text(
-                "❌ متأسفانه دریافت اطلاعات ناموفق بود. لطفاً دوباره تلاش کنید.",
+                "❌ متأسفانه دریافت اطلاعات ناموفق بود یا ظرفیتی یافت نشد. لطفاً دوباره تلاش کنید.",
                 reply_markup=get_reset_inline_keyboard()
             )
             return
@@ -125,29 +135,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "btn_manual":
         await query.message.reply_text(
-            "مرحله ۱ از ۲:\nلطفاً **مکان آزمون** را وارد کنید.\n(مثال: `ONLINE` یا `Sydney`)",
+            f"📍 مکان آزمون به صورت پیش‌فرض **{DEFAULT_LOCATION}** در نظر گرفته شد.\n\nلطفاً **تاریخ مدنظر** را وارد کنید:\n(مثال: `03-09-2026` یا بخشی از تاریخ مثل `September` یا `03`)",
             reply_markup=get_reset_inline_keyboard(),
             parse_mode="Markdown"
         )
-        return LOCATION
-
-async def get_location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    context.user_data['location'] = text
-    await update.message.reply_text(
-        "مرحله ۲ از ۲:\nلطفاً **تاریخ مدنظر** را وارد کنید:\n(مثال: `03-09-2026` یا بخشی از تاریخ مثل `September` یا `03`)",
-        reply_markup=get_reset_inline_keyboard(),
-        parse_mode="Markdown"
-    )
-    return MANUAL_DATE
+        return MANUAL_DATE
 
 async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     target_date = update.message.text
-    target_location = context.user_data.get('location')
+    target_location = DEFAULT_LOCATION
     chat_id = update.effective_chat.id
 
     await update.message.reply_text(
-        f"✅ **پایش خودکار فعال شد!**\n\n📍 مکان: `{target_location}`\n📅 تاریخ: `{target_date}`\n\nربات هر ۵ دقیقه سایت را چک کرده و تغییرات را اطلاع می‌دهد.",
+        f"✅ **پایش خودکار فعال شد!**\n\n📍 مکان: `{target_location}`\n📅 تاریخ: `{target_date}`\n\nربات هر ۵ دقیقه سایت را چک کرده و در صورت وجود ظرفیت اطلاع می‌دهد.",
         parse_mode="Markdown",
         reply_markup=get_reset_inline_keyboard()
     )
@@ -189,7 +189,7 @@ async def start_monitoring(chat_id, location, date_str, context):
         if not found:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"ℹ️ تاریخ `{date_str}` با مکان `{location}` در لیست حال حاضر سایت پیدا نشد.",
+                text=f"ℹ️ تاریخ `{date_str}` در لیست حال حاضر سایت پیدا نشد.",
                 parse_mode="Markdown",
                 reply_markup=get_reset_inline_keyboard()
             )
@@ -208,7 +208,6 @@ def main():
             CallbackQueryHandler(button_click, pattern="^btn_manual$")
         ],
         states={
-            LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_location)],
             MANUAL_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_date_and_start)],
         },
         fallbacks=[
