@@ -7,7 +7,7 @@ from telegram.ext import (
 )
 
 # ==================== تنظیمات ====================
-TELEGRAM_TOKEN = "8708901411:AAFrP287VRqln4V2dZZHYl1FUvZAWwzU97I"
+TELEGRAM_TOKEN = "8708901411:AAEWDd3HcW-oAqyrAhfp4h6fhmLlO88eS-k"
 
 LOCATION, MANUAL_DATE = range(2)
 # =================================================
