@@ -1,11 +1,26 @@
 import asyncio
 import re
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import threading
 from playwright.async_api import async_playwright
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
     MessageHandler, filters, ConversationHandler, ContextTypes
 )
+
+# ایجاد یک سرور ساختگی برای پاسخ به Render
+class DummyServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), DummyServer)
+    server.serve_forever()
 
 # ==================== تنظیمات ====================
 TELEGRAM_TOKEN = "8708901411:AAEAjdre8IXm9Ior8_KaZTJ8V1ajVN4Fdlk"
@@ -29,7 +44,6 @@ def get_reset_inline_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# تابع پایدار و گزارش‌دهنده وضعیت (Log)
 async def fetch_filtered_naati_dates(status_msg=None):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"])
@@ -86,7 +100,6 @@ async def fetch_filtered_naati_dates(status_msg=None):
             await browser.close()
             return []
 
-# دستور /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! به ربات پایش ظرفیت NAATI (ویژه CCL زبان فارسی) خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
@@ -94,7 +107,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# کلیک روی دکمه‌های شیشه‌ای
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -140,7 +152,6 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     status_msg = await update.message.reply_text("🔎 در حال بررسی اولیه تاریخ وارد شده در سایت...")
     
-    # تست اولیه بلافاصله پس از دریافت تاریخ
     data = await fetch_filtered_naati_dates(status_msg)
     
     try:
@@ -177,7 +188,7 @@ def is_match(user_input, site_text):
 
 async def start_monitoring(chat_id, location, date_str, context):
     while True:
-        await asyncio.sleep(300) # هر ۵ دقیقه بررسی مجدد
+        await asyncio.sleep(300)
         data = await fetch_filtered_naati_dates()
         for item in data:
             if is_match(location, item['location']) and (date_str in item['date'] or is_match(date_str, item['date'])):
@@ -194,6 +205,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 def main():
+    # اجرای سرور ساختگی برای تایید Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     conv_handler = ConversationHandler(
