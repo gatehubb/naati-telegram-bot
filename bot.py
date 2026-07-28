@@ -10,7 +10,7 @@ import html
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# تنظیمات لاگینگ برای بررسی دقیق رویدادها
+# تنظیمات لاگینگ
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -115,7 +115,7 @@ def get_all_monitors():
                 "mode": row[2],
                 "target_date": row[3],
                 "selected_dates": row[4].split(",") if row[4] else [],
-                "last_seats": row[5],
+                "last_seats": row[3],
                 "cached_snapshot": row[6].split(",") if row[6] else [],
                 "error_notified": row[7]
             }
@@ -174,7 +174,6 @@ TELEGRAM_TOKEN = "8708901411:AAGerrcWjeVS2CvQ3dHI4NLs6uO8RgE3uDU"
 USER_TEMP_SELECTIONS = {}
 
 def get_persistent_reply_keyboard():
-    """کیبورد ثابت پایین برنامه تلگرام اندروید"""
     keyboard = [
         [
             KeyboardButton("🔙 برگشت به منوی اصلی"),
@@ -216,6 +215,13 @@ def get_error_retry_keyboard():
         [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+# تابع کمکی برای پاک کردن امن پیام‌ها
+async def safe_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
 
 class StatusTracker:
     def __init__(self, message):
@@ -335,7 +341,7 @@ def is_match(user_input, site_text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text(
-        "سلام! به ربات پایش ظرفیت NAATI (ویژه CCL زبان فارسی) خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
+        "سلام! به ربات پایش ظرفیت NAATI خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
         reply_markup=get_persistent_reply_keyboard()
     )
     await update.message.reply_text(
@@ -379,40 +385,46 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or update.effective_user.first_name or "Unknown"
 
     if query.data == "btn_main":
-        await query.message.reply_text("منوی اصلی:", reply_markup=get_main_inline_keyboard(chat_id))
+        await safe_delete_message(context, chat_id, query.message.message_id)
+        await context.bot.send_message(chat_id, "منوی اصلی:", reply_markup=get_main_inline_keyboard(chat_id))
         return
 
     if query.data == "btn_status":
+        await safe_delete_message(context, chat_id, query.message.message_id)
         status_text = await show_status(chat_id)
-        await query.message.reply_text(status_text, parse_mode="HTML", reply_markup=get_single_main_menu_keyboard())
+        await context.bot.send_message(chat_id, status_text, parse_mode="HTML", reply_markup=get_single_main_menu_keyboard())
         return
 
     if query.data == "btn_stop_monitor":
         remove_monitor(chat_id)
-        await query.message.reply_text("🔴 <b>پایش شما با موفقیت متوقف شد.</b>", parse_mode="HTML", reply_markup=get_main_inline_keyboard(chat_id))
+        await safe_delete_message(context, chat_id, query.message.message_id)
+        await context.bot.send_message(chat_id, "🔴 <b>پایش شما با موفقیت متوقف شد.</b>", parse_mode="HTML", reply_markup=get_main_inline_keyboard(chat_id))
         return
 
     if query.data == "btn_retry_monitor":
+        await safe_delete_message(context, chat_id, query.message.message_id)
         monitor_info = get_monitor(chat_id)
         if not monitor_info:
-            await query.message.reply_text("⚠️ هیچ درخواست پایش قبلی یافت نشد. لطفاً تاریخ جدید انتخاب کنید.", reply_markup=get_main_inline_keyboard(chat_id))
+            await context.bot.send_message(chat_id, "⚠️ هیچ درخواست پایش قبلی یافت نشد. لطفاً تاریخ جدید انتخاب کنید.", reply_markup=get_main_inline_keyboard(chat_id))
             return
         
-        status_msg = await query.message.reply_text("🔄 <b>در حال تلاش مجدد برای بارگذاری و بررسی درخواست پایش شما...</b>", parse_mode="HTML")
+        status_msg = await context.bot.send_message(chat_id, "🔄 <b>در حال تلاش مجدد برای بارگذاری درخواست پایش شما...</b>", parse_mode="HTML")
         tracker = StatusTracker(status_msg)
         data, error_err = await fetch_filtered_naati_dates(tracker)
         await tracker.delete_status_message()
 
         if not data:
             safe_err = html.escape(str(error_err)[:250]) if error_err else "عدم پاسخگویی سرور NAATI"
-            await query.message.reply_text(
-                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\nلطفاً دوباره امتحان کنید یا تاریخ جدیدی انتخاب کنید:",
+            await context.bot.send_message(
+                chat_id,
+                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard()
             )
         else:
             update_error_status(chat_id, 0)
-            await query.message.reply_text(
+            await context.bot.send_message(
+                chat_id,
                 "✅ <b>اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.</b>",
                 parse_mode="HTML",
                 reply_markup=get_single_main_menu_keyboard()
@@ -420,18 +432,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if query.data == "btn_list":
-        status_msg = await query.message.reply_text("⚙️ <b>در حال دریافت اطلاعات از سایت NAATI...</b>", parse_mode="HTML")
+        current_msg_id = query.message.message_id
+        status_msg = await context.bot.send_message(chat_id, "⚙️ <b>در حال دریافت اطلاعات از سایت NAATI...</b>", parse_mode="HTML")
         tracker = StatusTracker(status_msg)
         
         data, error_err = await fetch_filtered_naati_dates(tracker)
         await tracker.delete_status_message()
+        await safe_delete_message(context, chat_id, current_msg_id)
 
         if not data:
             safe_err = html.escape(str(error_err)[:250]) if error_err else "عدم پاسخگویی سرور NAATI"
-            await query.message.reply_text(
-                f"❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n"
-                f"⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\n"
-                f"لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+            await context.bot.send_message(
+                chat_id,
+                f"❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard()
             )
@@ -444,13 +457,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"{idx}. 📍 <code>{html.escape(item['location'])}</code> | 📅 <code>{html.escape(item['date'])}</code> | 💺 <b>{html.escape(item['seats'])}</b>\n"
 
         msg += "\n👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>"
-        await query.message.reply_text(msg, parse_mode="HTML", reply_markup=get_mode_selection_keyboard())
+        await context.bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=get_mode_selection_keyboard())
         return
 
     elif query.data == "mode_single":
+        await safe_delete_message(context, chat_id, query.message.message_id)
         data = context.user_data.get('cached_dates', [])
         if not data:
-            await query.message.reply_text("اطلاعات منقضی شده، لطفاً دوباره دریافت لیست را بزنید.", reply_markup=get_single_main_menu_keyboard())
+            await context.bot.send_message(chat_id, "اطلاعات منقضی شده، لطفاً دوباره دریافت لیست را بزنید.", reply_markup=get_single_main_menu_keyboard())
             return
 
         keyboard = []
@@ -458,10 +472,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard.append([InlineKeyboardButton(f"📅 {item['date']} ({item['seats']})", callback_data=f"select_single_{idx}")])
         keyboard.append([InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")])
 
-        await query.message.reply_text("🎯 <b>یک تاریخ را جهت پایش تکی انتخاب کنید:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await context.bot.send_message(chat_id, "🎯 <b>یک تاریخ را جهت پایش تکی انتخاب کنید:</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     elif query.data.startswith("select_single_"):
+        await safe_delete_message(context, chat_id, query.message.message_id)
         idx = int(query.data.split("_")[-1])
         data = context.user_data.get('cached_dates', [])
         if idx >= len(data):
@@ -483,16 +498,19 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d_safe = html.escape(selected_item['date'])
         s_safe = html.escape(selected_item['seats'])
 
-        await query.message.reply_text(
-            f"✅ <b>پایش تکی فعال شد!</b>\n\n📅 تاریخ انتخابی: <code>{d_safe}</code>\n💺 ظرفیت فعلی: <b>{s_safe}</b>\n\nℹ️ <i>در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید در محدوده ±4 سطر اطلاع داده می‌شود.</i>",
+        # پیام نهایی تایید (تنها پیامی که باقی می‌ماند)
+        await context.bot.send_message(
+            chat_id,
+            f"✅ <b>پایش تکی فعال شد!</b>\n\n📅 تاریخ انتخابی: <code>{d_safe}</code>\n💺 ظرفیت فعلی: <b>{s_safe}</b>\n\nℹ️ <i>در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.</i>",
             parse_mode="HTML",
             reply_markup=get_single_main_menu_keyboard()
         )
         return
 
     elif query.data == "mode_multi":
+        await safe_delete_message(context, chat_id, query.message.message_id)
         USER_TEMP_SELECTIONS[chat_id] = set()
-        await render_multi_select_menu(query, context, chat_id)
+        await render_multi_select_menu(query, context, chat_id, edit=False)
         return
 
     elif query.data.startswith("toggle_multi_"):
@@ -519,6 +537,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("⚠️ لطفاً حداقل یک تاریخ را انتخاب کنید!", show_alert=True)
             return
 
+        await safe_delete_message(context, chat_id, query.message.message_id)
         selected_items = [data[i] for i in selections if i < len(data)]
         selected_dates = [item['date'] for item in selected_items]
         last_seats = " | ".join([f"{item['date']}:{item['seats']}" for item in selected_items])
@@ -533,8 +552,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         dates_str = "\n".join([f"• <code>{html.escape(d)}</code>" for d in selected_dates])
-        await query.message.reply_text(
-            f"✅ <b>پایش چندتایی با موفقیت فعال شد:</b>\n\n{dates_str}",
+        
+        # پیام نهایی تایید (تنها پیامی که باقی می‌ماند)
+        await context.bot.send_message(
+            chat_id,
+            f"✅ <b>پایش چندتایی فعال شد!</b>\n\n{dates_str}",
             parse_mode="HTML",
             reply_markup=get_single_main_menu_keyboard()
         )
@@ -564,7 +586,7 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
         except Exception:
             pass
     else:
-        await query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await context.bot.send_message(chat_id, text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
 # ==================== پنل مدیریت (ADMIN PANEL) ====================
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -672,8 +694,7 @@ async def global_monitoring_loop(app):
                                 text=(
                                     f"❌ <b>خطا در پایش درخواست شما!</b>\n\n"
                                     f"در میانه زمان پایش، ربات نتوانست وارد سایت شود یا داده‌ها را بررسی کند.\n\n"
-                                    f"⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\n"
-                                    f"لطفاً یکی از گزینه‌های زیر را جهت ادامه انتخاب کنید:"
+                                    f"⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>"
                                 ),
                                 parse_mode="HTML",
                                 reply_markup=get_error_retry_keyboard()
