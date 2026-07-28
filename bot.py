@@ -170,7 +170,7 @@ def run_dummy_server():
     server.serve_forever()
 
 # ==================== کیبوردهای ثابت و این‌لاین ====================
-TELEGRAM_TOKEN = "8708901411:AAGerrcWjeVS2CvQ3dHI4NLs6uO8RgE3uDU"
+TELEGRAM_TOKEN = "8708901411:AAHq60CbzFXNhIfhNlP7R0mH4rQ1a2LVS_4"
 USER_TEMP_SELECTIONS = {}
 
 def get_persistent_reply_keyboard():
