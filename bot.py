@@ -30,7 +30,7 @@ def ensure_playwright_browsers():
 ensure_playwright_browsers()
 
 from playwright.async_api import async_playwright
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler, 
     MessageHandler, filters, ConversationHandler, ContextTypes
@@ -116,7 +116,7 @@ def get_all_monitors():
         }
     return result
 
-# ==================== سیستم امنیت و احراز هویت ادمین ====================
+# ==================== سیستم امنیت ادمین ====================
 ADMIN_PASSWORD = "2377451"
 ADMIN_LOGIN_STATE = 100
 
@@ -152,12 +152,12 @@ def reset_admin_attempts(chat_id):
     conn.commit()
     conn.close()
 
-# ==================== سرور زنده نگه داشتن پورت Render ====================
+# ==================== سرور پورت Render ====================
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"NAATI Monitor Bot is Active!")
+        self.wfile.write(b"Bot Active!")
 
     def log_message(self, format, *args):
         return
@@ -167,9 +167,19 @@ def run_dummy_server():
     server = HTTPServer(("0.0.0.0", port), DummyServer)
     server.serve_forever()
 
-# ==================== ثابت‌ها و کیبوردها ====================
+# ==================== کیبوردهای ثابت و این‌لاین ====================
 TELEGRAM_TOKEN = "8708901411:AAGerrcWjeVS2CvQ3dHI4NLs6uO8RgE3uDU"
 USER_TEMP_SELECTIONS = {}
+
+def get_persistent_reply_keyboard():
+    """کیبورد ثابت پایین برنامه تلگرام اندروید"""
+    keyboard = [
+        [
+            KeyboardButton("🔙 برگشت به منوی اصلی"),
+            KeyboardButton("⬅️ برگشت به صفحه قبل")
+        ]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 def get_main_inline_keyboard(chat_id=None):
     keyboard = []
@@ -226,7 +236,7 @@ class StatusTracker:
         except Exception:
             pass
 
-# ==================== استخراج اطلاعات از سایت NAATI ====================
+# ==================== دریافت داده‌ها از NAATI ====================
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
@@ -310,13 +320,31 @@ def is_match(user_input, site_text):
     clean_site = re.sub(r'[^a-zA-Z0-9]', '', str(site_text).lower())
     return clean_user in clean_site or clean_site in clean_user
 
-# ==================== هاندلرهای اصلی کاربر ====================
+# ==================== هاندلرهای اصلی ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     await update.message.reply_text(
         "سلام! به ربات پایش ظرفیت NAATI (ویژه CCL زبان فارسی) خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
+        reply_markup=get_persistent_reply_keyboard()
+    )
+    await update.message.reply_text(
+        "منوی کاربری:",
         reply_markup=get_main_inline_keyboard(chat_id)
     )
+
+async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    chat_id = update.effective_chat.id
+
+    if text in ["🔙 برگشت به منوی اصلی", "⬅️ برگشت به صفحه قبل"]:
+        await update.message.reply_text(
+            "منوی اصلی:",
+            reply_markup=get_persistent_reply_keyboard()
+        )
+        await update.message.reply_text(
+            "انتخاب کنید:",
+            reply_markup=get_main_inline_keyboard(chat_id)
+        )
 
 async def show_status(chat_id):
     monitor_info = get_monitor(chat_id)
@@ -463,7 +491,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif query.data == "admin_refresh":
-        await show_admin_panel_text(query.message)
+        await send_admin_panel_details(context, chat_id, query.message)
         return
 
 async def render_multi_select_menu(query, context, chat_id, edit=False):
@@ -492,7 +520,6 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     status = get_admin_status(chat_id)
 
-    # بررسی قفل ۳۰ دقیقه‌ای
     if status["lockout_until"] > time.time():
         remaining_minutes = int((status["lockout_until"] - time.time()) / 60) + 1
         await update.message.reply_text(f"⛔️ **دسترسی مسدود است!**\nبه دلیل ۳ بار ورود اشتباه، تا `{remaining_minutes}` دقیقه دیگر امکان ورود ندارید.")
@@ -514,7 +541,7 @@ async def handle_admin_password(update: Update, context: ContextTypes.DEFAULT_TY
     if entered_pass == ADMIN_PASSWORD:
         reset_admin_attempts(chat_id)
         await update.message.reply_text("✅ **ورود موفقیت‌آمیز بود.**")
-        await show_admin_panel_text(update.message)
+        await send_admin_panel_details(context, chat_id)
         return ConversationHandler.END
     else:
         record_failed_attempt(chat_id)
@@ -528,7 +555,7 @@ async def handle_admin_password(update: Update, context: ContextTypes.DEFAULT_TY
         
         return ConversationHandler.END
 
-async def show_admin_panel_text(message_obj):
+async def send_admin_panel_details(context: ContextTypes.DEFAULT_TYPE, chat_id, message_to_edit=None):
     monitors = get_all_monitors()
     total_users = len(monitors)
 
@@ -555,15 +582,15 @@ async def show_admin_panel_text(message_obj):
         [InlineKeyboardButton("🔙 خروج", callback_data="btn_main")]
     ]
     
-    try:
-        if hasattr(message_obj, 'edit_text'):
-            await message_obj.edit_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-        else:
-            await message_obj.reply_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    except Exception:
-        pass
+    if message_to_edit:
+        try:
+            await message_to_edit.edit_text(msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            pass
+    else:
+        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ==================== حلقه عمومی پایش دیتابیس ====================
+# ==================== حلقه پایش عمومی ====================
 async def global_monitoring_loop(app):
     while True:
         await asyncio.sleep(300) # هر ۵ دقیقه
@@ -628,7 +655,7 @@ async def send_alert(app, chat_id, text):
         logging.error(f"Alert error to {chat_id}: {e}")
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("عملیات لغو شد.", reply_markup=get_main_inline_keyboard(update.effective_chat.id))
+    await update.message.reply_text("عملیات لغو شد.", reply_markup=get_persistent_reply_keyboard())
     return ConversationHandler.END
 
 def main():
@@ -648,6 +675,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(admin_conv_handler)
+    app.add_handler(MessageHandler(filters.Regex("^(🔙 برگشت به منوی اصلی|⬅️ برگشت به صفحه قبل)$"), handle_text_buttons))
     app.add_handler(CallbackQueryHandler(button_click))
 
     try:
