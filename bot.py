@@ -51,7 +51,8 @@ def init_db():
                 target_date TEXT,
                 selected_dates TEXT,
                 last_seats TEXT,
-                cached_snapshot TEXT
+                cached_snapshot TEXT,
+                error_notified INTEGER DEFAULT 0
             )
         ''')
         cursor.execute('''
@@ -63,19 +64,19 @@ def init_db():
         ''')
         conn.commit()
 
-def save_monitor(chat_id, username, mode, target_date="", selected_dates="", last_seats="", cached_snapshot=""):
+def save_monitor(chat_id, username, mode, target_date="", selected_dates="", last_seats="", cached_snapshot="", error_notified=0):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO monitors (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot))
+            INSERT OR REPLACE INTO monitors (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified))
         conn.commit()
 
 def get_monitor(chat_id):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT mode, target_date, selected_dates, last_seats, cached_snapshot, username FROM monitors WHERE chat_id = ?', (chat_id,))
+        cursor.execute('SELECT mode, target_date, selected_dates, last_seats, cached_snapshot, username, error_notified FROM monitors WHERE chat_id = ?', (chat_id,))
         row = cursor.fetchone()
         if row:
             return {
@@ -84,9 +85,16 @@ def get_monitor(chat_id):
                 "selected_dates": row[2].split(",") if row[2] else [],
                 "last_seats": row[3],
                 "cached_snapshot": row[4].split(",") if row[4] else [],
-                "username": row[5]
+                "username": row[5],
+                "error_notified": row[6]
             }
     return None
+
+def update_error_status(chat_id, status_value):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute('UPDATE monitors SET error_notified = ? WHERE chat_id = ?', (status_value, chat_id))
+        conn.commit()
 
 def remove_monitor(chat_id):
     with sqlite3.connect(DB_PATH) as conn:
@@ -97,7 +105,7 @@ def remove_monitor(chat_id):
 def get_all_monitors():
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute('SELECT chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot FROM monitors')
+        cursor.execute('SELECT chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified FROM monitors')
         rows = cursor.fetchall()
         
         result = {}
@@ -108,7 +116,8 @@ def get_all_monitors():
                 "target_date": row[3],
                 "selected_dates": row[4].split(",") if row[4] else [],
                 "last_seats": row[5],
-                "cached_snapshot": row[6].split(",") if row[6] else []
+                "cached_snapshot": row[6].split(",") if row[6] else [],
+                "error_notified": row[7]
             }
         return result
 
@@ -150,7 +159,7 @@ class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Bot Active!")
+        self.wfile.write(b"NAATI Monitor Bot is Active!")
 
     def log_message(self, format, *args):
         return
@@ -196,6 +205,14 @@ def get_mode_selection_keyboard():
             InlineKeyboardButton("🎯 انتخاب تکی", callback_data="mode_single"),
             InlineKeyboardButton("☑️ انتخاب چندتایی (حداکثر ۴)", callback_data="mode_multi")
         ],
+        [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_error_retry_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🔄 تلاش مجدد بارگذاری درخواست", callback_data="btn_retry_monitor")],
+        [InlineKeyboardButton("📋 انتخاب تاریخ جدید", callback_data="btn_list")],
         [InlineKeyboardButton("🔙 منوی اصلی", callback_data="btn_main")]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -294,7 +311,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "success")
             
-            return all_dates
+            return all_dates, None
 
         except Exception as e:
             error_details = str(e)
@@ -302,7 +319,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 last_step_text = tracker.steps[-1].replace("⏳ ", "").replace("...", "") if tracker.steps else "پردازش"
                 await tracker.update(last_step_text, "failed", error_details)
-            return None
+            return None, error_details
         finally:
             if browser:
                 await browser.close()
@@ -375,15 +392,49 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("🔴 <b>پایش شما با موفقیت متوقف شد.</b>", parse_mode="HTML", reply_markup=get_main_inline_keyboard(chat_id))
         return
 
+    if query.data == "btn_retry_monitor":
+        monitor_info = get_monitor(chat_id)
+        if not monitor_info:
+            await query.message.reply_text("⚠️ هیچ درخواست پایش قبلی یافت نشد. لطفاً تاریخ جدید انتخاب کنید.", reply_markup=get_main_inline_keyboard(chat_id))
+            return
+        
+        status_msg = await query.message.reply_text("🔄 <b>در حال تلاش مجدد برای بارگذاری و بررسی درخواست پایش شما...</b>", parse_mode="HTML")
+        tracker = StatusTracker(status_msg)
+        data, error_err = await fetch_filtered_naati_dates(tracker)
+        await tracker.delete_status_message()
+
+        if not data:
+            safe_err = html.escape(str(error_err)[:250]) if error_err else "عدم پاسخگویی سرور NAATI"
+            await query.message.reply_text(
+                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\nلطفاً دوباره امتحان کنید یا تاریخ جدیدی انتخاب کنید:",
+                parse_mode="HTML",
+                reply_markup=get_error_retry_keyboard()
+            )
+        else:
+            update_error_status(chat_id, 0)
+            await query.message.reply_text(
+                "✅ <b>اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.</b>",
+                parse_mode="HTML",
+                reply_markup=get_single_main_menu_keyboard()
+            )
+        return
+
     if query.data == "btn_list":
         status_msg = await query.message.reply_text("⚙️ <b>در حال دریافت اطلاعات از سایت NAATI...</b>", parse_mode="HTML")
         tracker = StatusTracker(status_msg)
         
-        data = await fetch_filtered_naati_dates(tracker)
+        data, error_err = await fetch_filtered_naati_dates(tracker)
         await tracker.delete_status_message()
 
         if not data:
-            await query.message.reply_text("❌ دریافت اطلاعات ناموفق بود. مجدداً تلاش کنید.", reply_markup=get_single_main_menu_keyboard())
+            safe_err = html.escape(str(error_err)[:250]) if error_err else "عدم پاسخگویی سرور NAATI"
+            await query.message.reply_text(
+                f"❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n"
+                f"⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\n"
+                f"لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+                parse_mode="HTML",
+                reply_markup=get_error_retry_keyboard()
+            )
             return
 
         context.user_data['cached_dates'] = data
@@ -425,7 +476,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mode="single",
             target_date=selected_item['date'],
             last_seats=selected_item['seats'],
-            cached_snapshot=cached_snapshot
+            cached_snapshot=cached_snapshot,
+            error_notified=0
         )
 
         d_safe = html.escape(selected_item['date'])
@@ -476,7 +528,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             username=username,
             mode="multi",
             selected_dates=",".join(selected_dates),
-            last_seats=last_seats
+            last_seats=last_seats,
+            error_notified=0
         )
 
         dates_str = "\n".join([f"• <code>{html.escape(d)}</code>" for d in selected_dates])
@@ -594,10 +647,10 @@ async def send_admin_panel_details(context: ContextTypes.DEFAULT_TYPE, chat_id, 
         logging.error(f"Error in send_admin_panel_details: {e}")
         await context.bot.send_message(chat_id=chat_id, text=f"⚠️ خطا در نمایش پنل ادمین:\n<code>{html.escape(str(e))}</code>", parse_mode="HTML")
 
-# ==================== حلقه پایش عمومی ====================
+# ==================== حلقه پایش عمومی و مدیریت خطاها ====================
 async def global_monitoring_loop(app):
     while True:
-        await asyncio.sleep(300) # هر ۵ دقیقه
+        await asyncio.sleep(300) # هر ۵ دقیقه بررسی مجدد
 
         try:
             monitors = get_all_monitors()
@@ -605,11 +658,35 @@ async def global_monitoring_loop(app):
                 continue
 
             logging.info(f"Checking NAATI site for {len(monitors)} database monitors...")
-            data = await fetch_filtered_naati_dates()
+            data, fetch_err = await fetch_filtered_naati_dates()
+
             if not data:
+                logging.warning(f"Monitoring fetch failed: {fetch_err}")
+                safe_err = html.escape(str(fetch_err)[:250]) if fetch_err else "عدم پاسخگویی یا قطع اتصال سرور NAATI"
+                
+                for chat_id, monitor_info in monitors.items():
+                    if monitor_info.get("error_notified", 0) == 0:
+                        try:
+                            await app.bot.send_message(
+                                chat_id=chat_id,
+                                text=(
+                                    f"❌ <b>خطا در پایش درخواست شما!</b>\n\n"
+                                    f"در میانه زمان پایش، ربات نتوانست وارد سایت شود یا داده‌ها را بررسی کند.\n\n"
+                                    f"⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>\n\n"
+                                    f"لطفاً یکی از گزینه‌های زیر را جهت ادامه انتخاب کنید:"
+                                ),
+                                parse_mode="HTML",
+                                reply_markup=get_error_retry_keyboard()
+                            )
+                            update_error_status(chat_id, 1)
+                        except Exception as send_err:
+                            logging.error(f"Failed to send error notification to {chat_id}: {send_err}")
                 continue
 
             for chat_id, monitor_info in monitors.items():
+                if monitor_info.get("error_notified", 0) == 1:
+                    update_error_status(chat_id, 0)
+
                 mode = monitor_info.get("mode")
 
                 if mode == "single":
@@ -621,7 +698,7 @@ async def global_monitoring_loop(app):
                     if current_idx is not None:
                         curr_seats = data[current_idx]['seats']
                         if curr_seats != last_seats:
-                            save_monitor(chat_id, monitor_info["username"], mode, target_date=target_date, last_seats=curr_seats, cached_snapshot=",".join(monitor_info["cached_snapshot"]))
+                            save_monitor(chat_id, monitor_info["username"], mode, target_date=target_date, last_seats=curr_seats, cached_snapshot=",".join(monitor_info["cached_snapshot"]), error_notified=0)
                             await send_alert(app, chat_id, f"🔔 <b>تغییر ظرفیت تاریخ انتخابی:</b>\n\n📅 تاریخ: <code>{html.escape(target_date)}</code>\n💺 ظرفیت جدید: <b>{html.escape(curr_seats)}</b>")
 
                         start_idx = max(0, current_idx - 4)
@@ -633,7 +710,7 @@ async def global_monitoring_loop(app):
 
                         if new_found:
                             updated_snapshot = snapshot + [item['date'] for item in new_found]
-                            save_monitor(chat_id, monitor_info["username"], mode, target_date=target_date, last_seats=curr_seats, cached_snapshot=",".join(updated_snapshot))
+                            save_monitor(chat_id, monitor_info["username"], mode, target_date=target_date, last_seats=curr_seats, cached_snapshot=",".join(updated_snapshot), error_notified=0)
                             msg_new = "🔥 <b>تاریخ جدید در محدوده ±4 سطر یافت شد!</b>\n\n"
                             for item in new_found:
                                 msg_new += f"📅 تاریخ: <code>{html.escape(item['date'])}</code> | 💺 ظرفیت: <b>{html.escape(item['seats'])}</b>\n"
