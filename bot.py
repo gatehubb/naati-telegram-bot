@@ -8,7 +8,7 @@ import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import threading
 
-# تنظیمات لاگینگ برای مشاهده وضعیت در Render
+# تنظیمات لاگینگ برای مشاهده در پنل Render
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -105,12 +105,12 @@ def get_all_monitors():
         }
     return result
 
-# ==================== سرور ساختگی پورت Render ====================
+# ==================== سرور ساختگی برای زنده نگه داشتن پورت Render ====================
 class DummyServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"NAATI Monitor Bot is Active!")
+        self.wfile.write(b"Bot is alive!")
 
     def log_message(self, format, *args):
         return
@@ -282,17 +282,13 @@ async def show_status(chat_id):
         return "❌ شما در حال حاضر **هیچ پایش فعالی ندارید.**"
 
     mode = monitor_info.get("mode")
-    if mode == "single":
+    if mode in ["single", "manual"]:
         d = monitor_info["target_date"]
         s = monitor_info["last_seats"]
-        return f"🟢 **پایش تکی فعال است:**\n\n📅 تاریخ: `{d}`\n💺 آخرین ظرفیت ثبت‌شده: **{s}**\nℹ️ *شرط:* اعلام تغییر ظرفیت + باز شدن تاریخ جدید در محدوده ±4 سطر"
+        return f"🟢 **پایش تکی/دستی فعال است:**\n\n📅 تاریخ: `{d}`\n💺 آخرین ظرفیت ثبت‌شده: **{s}**\nℹ️ *شرط:* اعلام تغییر ظرفیت + باز شدن تاریخ جدید در محدوده ±4 سطر"
     elif mode == "multi":
         dates_list = monitor_info.get("selected_dates", [])
-        return f"🟢 **پایش چندتایی فعال است:**\n\n📅 تاریخ‌های تحت پایش: `{', '.join(dates_list)}`\n💺 آخرین وضعیت: **{monitor_info['last_seats']}**"
-    elif mode == "manual":
-        d = monitor_info["target_date"]
-        s = monitor_info["last_seats"]
-        return f"🟢 **پایش دستی فعال است:**\n\n📅 تاریخ/عبارت: `{d}`\n💺 آخرین ظرفیت ثبت‌شده: **{s}**"
+        return f"🟢 **پایش چندتایی فعال است:**\n\n📅 تاریخ‌های تحت پایش:\n`{', '.join(dates_list)}`\n💺 آخرین وضعیت ظرفیت‌ها:\n**{monitor_info['last_seats']}**"
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -365,10 +361,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cached_snapshot=cached_snapshot
         )
 
-        logging.info(f"Single Monitor saved to DB for User {chat_id}")
-
         await query.message.reply_text(
-            f"✅ **پایش تکی فعال و در دیتابیس ذخیره شد!**\n\n📅 تاریخ انتخابی: `{selected_item['date']}`\n💺 ظرفیت فعلی: **{selected_item['seats']}**\n\nℹ️ *پایش شما حتی با ری‌استارت سرور فعال باقی خواهد ماند.*",
+            f"✅ **پایش تکی فعال شد!**\n\n📅 تاریخ انتخابی: `{selected_item['date']}`\n💺 ظرفیت فعلی: **{selected_item['seats']}**\n\nℹ️ *در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید در محدوده ±4 سطر اطلاع داده می‌شود.*",
             parse_mode="Markdown",
             reply_markup=get_single_main_menu_keyboard()
         )
@@ -405,7 +399,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         selected_items = [data[i] for i in selections if i < len(data)]
         selected_dates = [item['date'] for item in selected_items]
-        last_seats = ",".join([f"{item['date']}:{item['seats']}" for item in selected_items])
+        last_seats = " | ".join([f"{item['date']}:{item['seats']}" for item in selected_items])
 
         save_monitor(
             chat_id=chat_id,
@@ -456,28 +450,37 @@ async def get_date_and_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     target_date = update.message.text
     chat_id = update.effective_chat.id
 
-    status_msg = await update.message.reply_text("⚙️ **در حال بررسی...**", parse_mode="Markdown")
+    status_msg = await update.message.reply_text("⚙️ **در حال استخراج ظرفیت فعلی...**", parse_mode="Markdown")
     tracker = StatusTracker(status_msg)
 
     data = await fetch_filtered_naati_dates(tracker)
     await tracker.delete_status_message()
 
     if not data:
-        await update.message.reply_text("❌ عملیات پایش متوقف شد.", reply_markup=get_single_main_menu_keyboard())
+        await update.message.reply_text("❌ دریافت اطلاعات سایت ناموفق بود. پایش فعال نشد.", reply_markup=get_single_main_menu_keyboard())
         return ConversationHandler.END
 
     found_item = next((item for item in data if is_match(target_date, item['date'])), None)
-    initial_seats = found_item['seats'] if found_item else "یافت نشد"
+    
+    if found_item:
+        initial_seats = found_item['seats']
+        matched_date = found_item['date']
+    else:
+        initial_seats = "یافت نشد / تکمیل"
+        matched_date = target_date
+
+    cached_snapshot = ",".join([d['date'] for d in data])
 
     save_monitor(
         chat_id=chat_id,
         mode="manual",
-        target_date=target_date,
-        last_seats=initial_seats
+        target_date=matched_date,
+        last_seats=initial_seats,
+        cached_snapshot=cached_snapshot
     )
 
     await update.message.reply_text(
-        f"✅ **پایش دستی فعال شد!**\n\n📅 تاریخ: `{target_date}`\n💺 وضعیت فعلی: **{initial_seats}**",
+        f"✅ **پایش دستی با موفقیت فعال شد!**\n\n📅 تاریخ مدنظر: `{matched_date}`\n💺 ظرفیت فعلی در سایت: **{initial_seats}**\n\nℹ️ *ربات علاوه بر تغییر این ظرفیت، تاریخ‌های جدید در محدوده ±4 سطر را نیز پایش می‌کند.*",
         parse_mode="Markdown",
         reply_markup=get_single_main_menu_keyboard()
     )
@@ -508,17 +511,7 @@ async def global_monitoring_loop(app):
         for chat_id, monitor_info in monitors.items():
             mode = monitor_info.get("mode")
 
-            if mode == "manual":
-                target_date = monitor_info["target_date"]
-                last_seats = monitor_info["last_seats"]
-                found_item = next((item for item in data if is_match(target_date, item['date'])), None)
-                current_seats = found_item['seats'] if found_item else "یافت نشد/تمام شده"
-
-                if current_seats != last_seats:
-                    save_monitor(chat_id, mode, target_date=target_date, last_seats=current_seats)
-                    await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت (پایش دستی):**\n\n📅 تاریخ: `{target_date}`\n💺 ظرفیت جدید: **{current_seats}**")
-
-            elif mode == "single":
+            if mode in ["single", "manual"]:
                 target_date = monitor_info["target_date"]
                 last_seats = monitor_info["last_seats"]
 
@@ -526,10 +519,12 @@ async def global_monitoring_loop(app):
 
                 if current_idx is not None:
                     curr_seats = data[current_idx]['seats']
+                    # ۱. چک کردن تغییر ظرفیت تاریخ اصلی
                     if curr_seats != last_seats:
                         save_monitor(chat_id, mode, target_date=target_date, last_seats=curr_seats, cached_snapshot=",".join(monitor_info["cached_snapshot"]))
                         await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت تاریخ انتخابی:**\n\n📅 تاریخ: `{target_date}`\n💺 ظرفیت جدید: **{curr_seats}**")
 
+                    # ۲. چک کردن تاریخ جدید در محدوده ±4 سطر
                     start_idx = max(0, current_idx - 4)
                     end_idx = min(len(data), current_idx + 5)
                     nearby_items = data[start_idx:end_idx]
@@ -544,6 +539,21 @@ async def global_monitoring_loop(app):
                         for item in new_found:
                             msg_new += f"📅 تاریخ: `{item['date']}` | 💺 ظرفیت: **{item['seats']}**\n"
                         await send_alert(app, chat_id, msg_new)
+                else:
+                    if last_seats != "یافت نشد / تکمیل":
+                        save_monitor(chat_id, mode, target_date=target_date, last_seats="یافت نشد / تکمیل", cached_snapshot=",".join(monitor_info["cached_snapshot"]))
+                        await send_alert(app, chat_id, f"⚠️ **تغییر وضعیت:** تاریخ `{target_date}` دیگر در جدول یافت نشد یا ظرفیت آن تمام شده است.")
+
+            elif mode == "multi":
+                selected_dates = monitor_info.get("selected_dates", [])
+                # چک کردن تک‌تک تاریخ‌های انتخابی
+                for s_date in selected_dates:
+                    found_item = next((item for item in data if is_match(s_date, item['date'])), None)
+                    current_seats = found_item['seats'] if found_item else "یافت نشد"
+
+                    if s_date not in monitor_info["last_seats"] or current_seats not in monitor_info["last_seats"]:
+                        # هشدار تغییر ظرفیت یکی از موارد
+                        await send_alert(app, chat_id, f"🔔 **تغییر ظرفیت (پایش چندتایی):**\n\n📅 تاریخ: `{s_date}`\n💺 وضعیت جدید: **{current_seats}**")
 
 async def send_alert(app, chat_id, text):
     try:
@@ -598,7 +608,7 @@ def main():
 
     loop.create_task(global_monitoring_loop(app))
 
-    logging.info("ربات با دیتابیس پایدار با موفقیت روشن شد...")
+    logging.info("ربات با دیتابیس پایدار و پایش کامل آماده کار است...")
     app.run_polling()
 
 if __name__ == "__main__":
