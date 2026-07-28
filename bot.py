@@ -31,44 +31,30 @@ from telegram.ext import (
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-# خاموش کردن لاگ‌های اضافه Flask/Werkzeug
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-# ==================== تنظیمات متغیرهای محیطی و امنیت ====================
+# ==================== تنظیمات متغیرهای محیطی ====================
 TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
-
-if not TELEGRAM_TOKEN:
-  logging.warning(
-      "⚠️ متغیر BOT_TOKEN یافت نشد! لطفاً آن را در تنظیمات سیستم/Render ست"
-      " کنید."
-  )
 
 DB_PATH = "monitors.db"
 USER_TEMP_SELECTIONS = {}
 
 
-# ==================== خودکارسازی نصب مرورگر ====================
+# ==================== نصب اتوماتیک مرورگر در صورت نیاز ====================
 def ensure_playwright_browsers():
-  try:
-    from playwright.async_api import async_playwright
-  except ImportError:
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "playwright"], check=True
-    )
-
   try:
     subprocess.run(
         [sys.executable, "-m", "playwright", "install", "chromium"], check=True
     )
   except Exception as e:
-    logging.error(f"Playwright install log: {e}")
+    logging.warning(f"Playwright browser auto-install notice: {e}")
 
 
 ensure_playwright_browsers()
 
 
-# ==================== مدیریت دیتابیس SQLite (Thread-Safe & Async) ====================
+# ==================== مدیریت دیتابیس (Async & WAL) ====================
 def get_db_connection():
   conn = sqlite3.connect(DB_PATH, timeout=30.0)
   conn.execute("PRAGMA journal_mode=WAL;")
@@ -263,7 +249,7 @@ def _record_failed_attempt_sync(chat_id):
   lockout_until = status["lockout_until"]
 
   if attempts >= 3:
-    lockout_until = time.time() + 1800  # ۳۰ دقیقه قفل
+    lockout_until = time.time() + 1800
 
   with get_db_connection() as conn:
     cursor = conn.cursor()
@@ -290,24 +276,24 @@ async def reset_admin_attempts(chat_id):
   await asyncio.to_thread(_reset_admin_attempts_sync, chat_id)
 
 
-# ==================== وب‌سرور FLASK ====================
+# ==================== وب‌سرور جهت زنده نگه داشتن در Render ====================
 flask_app = Flask(__name__)
 
 
 @flask_app.route("/")
 def keep_alive():
-  return "NAATI Monitor Bot is Active and Running!"
+  return "NAATI Monitor Bot is Active and Running!", 200
 
 
 def run_flask_server():
-  port = int(os.environ.get("PORT", 8080))
+  port = int(os.environ.get("PORT", 10000))
   flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 
 threading.Thread(target=run_flask_server, daemon=True).start()
 
 
-# ==================== کیبوردهای ساختاریافته ====================
+# ==================== کیبوردهای ربات ====================
 def get_persistent_reply_keyboard():
   keyboard = [[
       KeyboardButton("🔙 برگشت به منوی اصلی"),
@@ -1184,8 +1170,13 @@ async def post_init(app):
 
 def main():
   if not TELEGRAM_TOKEN:
-    logging.critical("❌ توکن ربات تنظیم نشده است. برنامه متوقف می‌شود.")
-    return
+    logging.critical(
+        "❌ توکن ربات پیدا نشد! متغیر محیطی BOT_TOKEN در Render تنظیم نشده"
+        " است."
+    )
+    # جهت جلوگیری از ری‌استارت ناخواسته، ۵ دقیقه برنامه‌دار می‌ماند و متوقف می‌شود
+    time.sleep(300)
+    sys.exit(1)
 
   application = (
       ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
