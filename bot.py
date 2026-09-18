@@ -61,7 +61,7 @@ def simplify_error_message(raw_err: str) -> str:
     return "خطا در ارتباط با سرور NAATI"
 
 # ---------------------------------------------------------
-# تابع اصلی اسکرپ و استخراج تاریخ‌های NAATI با Playwright
+# تابع اسکرپ و استخراج تاریخ‌های NAATI با Playwright
 # ---------------------------------------------------------
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
@@ -94,7 +94,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 timeout=45000,
             )
 
-            # ۲. بستن بنر کوکی
+            # ۲. بستن بنر کوکی در صورت وجود
             try:
                 cookie_btn = page.locator("button:has-text('I Agree'), #onetrust-accept-btn-handler")
                 if await cookie_btn.count() > 0:
@@ -106,7 +106,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("باز کردن سایت NAATI", "success")
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
 
-            # ۳. انتظار برای لود منوی اول و انتخاب آزمون CCL
+            # ۳. انتخاب نوع آزمون
             select_ccl = page.locator("select").nth(0)
             await select_ccl.wait_for(state="attached", timeout=15000)
             await select_ccl.select_option(label="Credentialed Community Language Test")
@@ -115,7 +115,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
 
-            # ۴. انتظار صریح برای فعال شدن منوی زبان جهت رفع تایم‌آوت
+            # ۴. انتظار برای فعال شدن منوی زبان (حل تایم‌آوت)
             select_lang = page.locator("select").nth(1)
             await page.wait_for_function(
                 '() => !document.querySelectorAll("select")[1].disabled', 
@@ -127,7 +127,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("اعمال فیلتر زبان (Persian)", "success")
                 await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
 
-            # ۵. استخراج جدول نتایج
+            # ۵. استخراج داده‌ها از جدول
             await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
 
@@ -212,7 +212,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(result_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 # ---------------------------------------------------------
-# اجرای اصلی ربات
+# اجرای اصلی ربات (جلوگیری از Conflict)
 # ---------------------------------------------------------
 if __name__ == "__main__":
     BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -226,4 +226,6 @@ if __name__ == "__main__":
         app.add_handler(CallbackQueryHandler(button_handler))
 
         print("ربات با موفقیت روشن شد...")
-        app.run_polling()
+        
+        # drop_pending_updates=True باعث می‌شود اتصالات قبلی فوراً باطل شوند و Conflict رخ ندهد
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
