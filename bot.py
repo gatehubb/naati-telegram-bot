@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
 
 async def fetch_naati_dates():
-    """ورود به سایت NAATI، تنظیم 3 فیلتر و استخراج جدول ظرفیت‌ها"""
+    """مراجعه به NAATI، انتخاب فیلترها و استخراج جدول ظرفیت‌ها"""
     url = "https://www.naati.com.au/test-date/"
     
     async with async_playwright() as p:
@@ -28,11 +28,11 @@ async def fetch_naati_dates():
         
         try:
             # ۱. باز کردن صفحه
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=35000)
             
             # ۲. انتخاب Test Type -> Credentialed Community Language Test
             test_type_select = page.locator("select").nth(0)
-            await test_type_select.wait_for(state="visible", timeout=10000)
+            await test_type_select.wait_for(state="visible", timeout=15000)
             await test_type_select.select_option(label="Credentialed Community Language Test")
             await page.wait_for_timeout(1000)
 
@@ -45,8 +45,8 @@ async def fetch_naati_dates():
             loc_select = page.locator("select").nth(2)
             await loc_select.select_option(label="ONLINE - Online")
             
-            # ۵. مکث کوتاه برای به‌روزرسانی جدول AJAX
-            await page.wait_for_timeout(2000)
+            # ۵. مکث کوتاه جهت به‌روزرسانی جدول
+            await page.wait_for_timeout(2500)
 
             # ۶. استخراج سطر‌های جدول
             rows = await page.locator("tbody tr").all()
@@ -61,7 +61,6 @@ async def fetch_naati_dates():
                     date_time = cells[3].strip()
                     seats = cells[4].strip()
 
-                    # قالب‌بندی خروجی هر سطر
                     results.append(
                         f"📅 **تاریخ و زمان:** `{date_time}`\n"
                         f"🪑 **ظرفیت باقی‌مانده:** `{seats}`\n"
@@ -106,7 +105,7 @@ async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 def main():
     if not TOKEN:
-        logger.error("خطا: متغیر BOT_TOKEN در Environment پیدا نشد!")
+        logger.error("خطا: متغیر BOT_TOKEN یافت نشد!")
         return
 
     app = Application.builder().token(TOKEN).build()
