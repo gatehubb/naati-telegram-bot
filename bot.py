@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -38,7 +39,6 @@ class StatusTracker:
         if detail:
             text_line += f" ({detail})"
 
-        # به‌روزرسانی یا اضافه کردن مرحله
         found = False
         for i, s in enumerate(self.steps):
             if step_name in s:
@@ -87,7 +87,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
                 await tracker.update("باز کردن سایت NAATI", "in_progress")
 
-            # ۱. لود سریع صفحه بدون معطل شدن برای منابع سنگین
+            # ۱. بارگذاری سریع صفحه
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="domcontentloaded",
@@ -115,7 +115,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
 
-            # ۴. انتظار صریح برای فعال شدن (is_enabled) منوی زبان جهت رفع تایم‌آوت
+            # ۴. انتظار صریح برای فعال شدن منوی زبان جهت رفع تایم‌آوت
             select_lang = page.locator("select").nth(1)
             await page.wait_for_function(
                 '() => !document.querySelectorAll("select")[1].disabled', 
@@ -198,7 +198,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("ℹ️ در حال حاضر هیچ تاریخی برای زبان فارسی یافت نشد.")
             return
 
-        # فرمت‌دهی خروجی برای ارسال به کاربر
         result_text = "📅 **تاریخ‌های فعال آزمون NAATI (زبان فارسی):**\n\n"
         for item in dates:
             result_text += (
@@ -216,7 +215,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # اجرای اصلی ربات
 # ---------------------------------------------------------
 if __name__ == "__main__":
-    import os
     BOT_TOKEN = os.getenv("BOT_TOKEN")
 
     if not BOT_TOKEN:
