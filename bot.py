@@ -10,9 +10,9 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-# تنظیمات پیشرفته Logging
+# تنظیمات Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -65,7 +65,7 @@ def simplify_error_message(raw_err: str) -> str:
     return "خطای غیرمنتظره در پردازش اطلاعات"
 
 # ---------------------------------------------------------
-# اسکرپر مقاوم و بهینه‌شده با Playwright
+# اسکرپر Playwright برای NAATI
 # ---------------------------------------------------------
 async def fetch_filtered_naati_dates(tracker: Optional[StatusTracker] = None):
     async with async_playwright() as p:
@@ -127,7 +127,7 @@ async def fetch_filtered_naati_dates(tracker: Optional[StatusTracker] = None):
                 await tracker.update("تنظیم فیلتر نوع آزمون (CCL)", "success")
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
 
-            # ۴. انتظار برای فعال شدن JS و منوی دوم
+            # ۴. انتظار برای فعال شدن منوی دوم و انتخاب زبان
             await page.wait_for_function(
                 '() => { const s = document.querySelectorAll("select"); return s.length > 1 && !s[1].disabled; }',
                 timeout=25000
@@ -184,7 +184,7 @@ async def fetch_filtered_naati_dates(tracker: Optional[StatusTracker] = None):
                 await browser.close()
 
 # ---------------------------------------------------------
-# هندلرهای تلگرام
+# هندلرهای ربات تلگرام
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("📅 بررسی ظرفیت‌های آنلاین CCL", callback_data="check_dates")]]
@@ -231,7 +231,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(result_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 # ---------------------------------------------------------
-# سرور بهینه Dummy HTTP جهت پاس کردن Health Check در Render
+# سرور Dummy HTTP جهت پاس کردن Health Check در Render
 # ---------------------------------------------------------
 async def start_dummy_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -247,7 +247,7 @@ async def start_dummy_http_server():
     return server
 
 # ---------------------------------------------------------
-# نقطه‌ی ورود و چرخه زیست برنامه (Main Entry Point)
+# نقطه ورود اصلی برنامه
 # ---------------------------------------------------------
 async def main():
     bot_token = os.getenv("BOT_TOKEN")
@@ -255,23 +255,21 @@ async def main():
         logger.error("BOT_TOKEN environment variable is missing!")
         return
 
-    # ۱. اجرای سرور وب ساختگی جهت پاس کردن Health Check رندر
+    # اجرای سرور وب برای Health Check
     http_server = await start_dummy_http_server()
 
-    # ۲. ساخت و پیکربندی ربات تلگرام
+    # ساخت ربات تلگرام
     application = ApplicationBuilder().token(bot_token).build()
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # ۳. راه‌اندازی ربات
     await application.initialize()
     await application.start()
     
-    # پاکسازی آپدیت‌های معلق جهت جلوگیری از Conflict
+    # حذف آپدیت‌های آویزان جهت جلوگیری از Conflict
     await application.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
     logger.info("Telegram Bot started successfully.")
 
-    # ۴. نگه‌داشتن برنامه در حالت اجرا
     stop_event = asyncio.Event()
     try:
         await stop_event.wait()
