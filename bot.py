@@ -1,36 +1,38 @@
+import os
 import logging
 import asyncio
-import os
-from datetime import datetime
+from typing import Optional, List, Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
 )
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Browser, BrowserContext, Page, TimeoutError as PlaywrightTimeoutError
 
-# تنظیمات Logging
+# تنظیمات پیشرفته Logging
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
-# کلاس مدیریت و ارسال وضعیت به کاربر (Status Tracker)
+# کلاس مدیریت وضعیت لحظه‌ای به کاربر (Status Tracker)
 # ---------------------------------------------------------
 class StatusTracker:
     def __init__(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self.update = update
         self.context = context
         self.message = None
-        self.steps = []
+        self.steps: List[str] = []
 
     async def start(self, initial_text: str):
         if self.update.callback_query:
             self.message = await self.update.callback_query.message.reply_text(initial_text)
-        else:
+        elif self.update.message:
             self.message = await self.update.message.reply_text(initial_text)
 
     async def update(self, step_name: str, status: str, detail: str = None):
@@ -48,7 +50,7 @@ class StatusTracker:
         if not found:
             self.steps.append(text_line)
 
-        full_text = "🔍 **در حال بررسی ظرفیت‌های آزمون NAATI...**\n\n" + "\n".join(self.steps)
+        full_text = "🔍 **در حال استعلام آنلاین ظرفیت‌های NAATI...**\n\n" + "\n".join(self.steps)
         if self.message:
             try:
                 await self.message.edit_text(full_text, parse_mode="Markdown")
@@ -58,18 +60,22 @@ class StatusTracker:
 def simplify_error_message(raw_err: str) -> str:
     if "Timeout" in raw_err:
         return "تایم‌آوت در پاسخگویی منوهای سایت NAATI"
-    return "خطا در ارتباط با سرور NAATI"
+    elif "net::ERR_" in raw_err:
+        return "خطای شبکه در برقراری ارتباط با سرور NAATI"
+    return "خطای غیرمنتظره در پردازش اطلاعات"
 
 # ---------------------------------------------------------
-# تابع اسکرپ و استخراج تاریخ‌های NAATI با Playwright
+# اسکرپر مقاوم و بهینه‌شده با Playwright
 # ---------------------------------------------------------
-async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
+async def fetch_filtered_naati_dates(tracker: Optional[StatusTracker] = None):
     async with async_playwright() as p:
         if tracker:
-            await tracker.update("راه‌اندازی مرورگر اختصاصی", "in_progress")
+            await tracker.update("راه‌اندازی موتور مرورگر اختصاصی", "in_progress")
 
-        browser = None
-        context = None
+        browser: Optional[Browser] = None
+        context: Optional[BrowserContext] = None
+        page: Optional[Page] = None
+
         try:
             browser = await p.chromium.launch(
                 headless=True,
@@ -78,23 +84,29 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                     "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--single-process",
                 ],
             )
-            context = await browser.new_context()
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 800}
+            )
             page = await context.new_page()
 
             if tracker:
-                await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
-                await tracker.update("باز کردن سایت NAATI", "in_progress")
+                await tracker.update("راه‌اندازی موتور مرورگر اختصاصی", "success")
+                await tracker.update("بارگذاری صفحه استعلام NAATI", "in_progress")
 
-            # ۱. بارگذاری سریع صفحه
+            # ۱. باز کردن صفحه با wait_until سریع
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="domcontentloaded",
                 timeout=45000,
             )
 
-            # ۲. بستن بنر کوکی در صورت وجود
+            # ۲. مدیریت بنر کوکی
             try:
                 cookie_btn = page.locator("button:has-text('I Agree'), #onetrust-accept-btn-handler")
                 if await cookie_btn.count() > 0:
@@ -103,31 +115,31 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 pass
 
             if tracker:
-                await tracker.update("باز کردن سایت NAATI", "success")
-                await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
+                await tracker.update("بارگذاری صفحه استعلام NAATI", "success")
+                await tracker.update("تنظیم فیلتر نوع آزمون (CCL)", "in_progress")
 
-            # ۳. انتخاب نوع آزمون
+            # ۳. انتخاب نوع آزمون (CCL Test)
             select_ccl = page.locator("select").nth(0)
             await select_ccl.wait_for(state="attached", timeout=15000)
             await select_ccl.select_option(label="Credentialed Community Language Test")
 
             if tracker:
-                await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
+                await tracker.update("تنظیم فیلتر نوع آزمون (CCL)", "success")
                 await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
 
-            # ۴. انتظار برای فعال شدن منوی زبان (حل تایم‌آوت)
-            select_lang = page.locator("select").nth(1)
+            # ۴. انتظار برای فعال شدن JS و منوی دوم
             await page.wait_for_function(
-                '() => !document.querySelectorAll("select")[1].disabled', 
+                '() => { const s = document.querySelectorAll("select"); return s.length > 1 && !s[1].disabled; }',
                 timeout=25000
             )
+            select_lang = page.locator("select").nth(1)
             await select_lang.select_option(label="Persian")
 
             if tracker:
                 await tracker.update("اعمال فیلتر زبان (Persian)", "success")
-                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
+                await tracker.update("استخراج و تحلیل جدول داده‌ها", "in_progress")
 
-            # ۵. استخراج داده‌ها از جدول
+            # ۵. استخراج جدول داده‌ها
             await page.wait_for_selector("table tbody tr", timeout=20000)
             rows = await page.query_selector_all("table tbody tr")
 
@@ -150,38 +162,45 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                     })
 
             if tracker:
-                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "success")
+                await tracker.update("استخراج و تحلیل جدول داده‌ها", "success")
 
             return all_dates, None
 
         except Exception as e:
             raw_err = str(e)
-            logging.error(f"Error fetching data: {raw_err}")
+            logger.error(f"Error in NAATI Scraper: {raw_err}")
             simple_err = simplify_error_message(raw_err)
             if tracker and tracker.steps:
                 last_step = tracker.steps[-1].replace("⏳ ", "").replace("...", "")
                 await tracker.update(last_step, "failed", simple_err)
             return None, simple_err
+
         finally:
+            if page:
+                await page.close()
             if context:
                 await context.close()
             if browser:
                 await browser.close()
 
 # ---------------------------------------------------------
-# دستورات و هندلرهای ربات تلگرام
+# هندلرهای تلگرام
 # ---------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("📅 بررسی تاریخ‌های آزمون CCL", callback_data="check_dates")]]
+    keyboard = [[InlineKeyboardButton("📅 بررسی ظرفیت‌های آنلاین CCL", callback_data="check_dates")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "سلام! به ربات استعلام تاریخ‌های آزمون NAATI خوش آمدید.\n"
-        "برای مشاهده آخرین ظرفیت‌های موجود روی دکمه زیر کلیک کنید:",
-        reply_markup=reply_markup
-    )
+    if update.message:
+        await update.message.reply_text(
+            "سلام! به ربات استعلام خودکار تاریخ‌های آزمون NAATI خوش آمدید.\n"
+            "برای مشاهده جدیدترین ظرفیت‌های فعال زبان فارسی، روی دکمه زیر کلیک کنید:",
+            reply_markup=reply_markup
+        )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if not query:
+        return
+
     await query.answer()
 
     if query.data == "check_dates":
@@ -191,14 +210,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         dates, error = await fetch_filtered_naati_dates(tracker)
 
         if error:
-            await query.message.reply_text(f"❌ **بررسی با خطا مواجه شد:**\n{error}", parse_mode="Markdown")
+            await query.message.reply_text(f"❌ **عملیات با خطا مواجه شد:**\n{error}", parse_mode="Markdown")
             return
 
         if not dates:
-            await query.message.reply_text("ℹ️ در حال حاضر هیچ تاریخی برای زبان فارسی یافت نشد.")
+            await query.message.reply_text("ℹ️ در حال حاضر هیچ ظرفیت فعالی برای زبان فارسی ثبت نشده است.")
             return
 
-        result_text = "📅 **تاریخ‌های فعال آزمون NAATI (زبان فارسی):**\n\n"
+        result_text = "📅 **جدول ظرفیت‌های آنلاین آزمون NAATI (Persian):**\n\n"
         for item in dates:
             result_text += (
                 f"🔹 **تاریخ:** `{item['date']}`\n"
@@ -212,20 +231,59 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(result_text, parse_mode="Markdown", reply_markup=reply_markup)
 
 # ---------------------------------------------------------
-# اجرای اصلی ربات (جلوگیری از Conflict)
+# سرور بهینه Dummy HTTP جهت پاس کردن Health Check در Render
 # ---------------------------------------------------------
+async def start_dummy_http_server():
+    port = int(os.environ.get("PORT", 8080))
+    async def handle_client(reader, writer):
+        response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nOK"
+        writer.write(response.encode('utf-8'))
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_client, "0.0.0.0", port)
+    logger.info(f"Dummy HTTP Server running on port {port} for Render Health Check.")
+    return server
+
+# ---------------------------------------------------------
+# نقطه‌ی ورود و چرخه زیست برنامه (Main Entry Point)
+# ---------------------------------------------------------
+async def main():
+    bot_token = os.getenv("BOT_TOKEN")
+    if not bot_token:
+        logger.error("BOT_TOKEN environment variable is missing!")
+        return
+
+    # ۱. اجرای سرور وب ساختگی جهت پاس کردن Health Check رندر
+    http_server = await start_dummy_http_server()
+
+    # ۲. ساخت و پیکربندی ربات تلگرام
+    application = ApplicationBuilder().token(bot_token).build()
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    # ۳. راه‌اندازی ربات
+    await application.initialize()
+    await application.start()
+    
+    # پاکسازی آپدیت‌های معلق جهت جلوگیری از Conflict
+    await application.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    logger.info("Telegram Bot started successfully.")
+
+    # ۴. نگه‌داشتن برنامه در حالت اجرا
+    stop_event = asyncio.Event()
+    try:
+        await stop_event.wait()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    finally:
+        logger.info("Stopping bot and HTTP server...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        http_server.close()
+        await http_server.wait_closed()
+
 if __name__ == "__main__":
-    BOT_TOKEN = os.getenv("BOT_TOKEN")
-
-    if not BOT_TOKEN:
-        print("خطا: مقدار BOT_TOKEN در متغیرهای محیطی تعریف نشده است!")
-    else:
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-        app.add_handler(CommandHandler("start", start_command))
-        app.add_handler(CallbackQueryHandler(button_handler))
-
-        print("ربات با موفقیت روشن شد...")
-        
-        # drop_pending_updates=True باعث می‌شود اتصالات قبلی فوراً باطل شوند و Conflict رخ ندهد
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    asyncio.run(main())
