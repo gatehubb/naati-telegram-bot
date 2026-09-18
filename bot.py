@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import html
 import logging
 import os
@@ -8,6 +9,8 @@ import subprocess
 import sys
 import threading
 import time
+from zoneinfo import ZoneInfo
+
 from flask import Flask
 from playwright.async_api import async_playwright
 from telegram import (
@@ -39,9 +42,89 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 
 DB_PATH = "monitors.db"
 USER_TEMP_SELECTIONS = {}
+TEHRAN_TZ = ZoneInfo("Asia/Tehran")
 
 
-# ==================== نصب اتوماتیک مرورگر در صورت نیاز ====================
+# ==================== تبدیل تاریخ میلادی به شمسی ====================
+def gregorian_to_jalali(gy, gm, gd):
+  g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+  if gy > 1600:
+    jy = 979
+    gy -= 1600
+  else:
+    jy = 0
+    gy -= 621
+  gy2 = gy + 1 if gm > 2 else gy
+  days = (
+      (365 * gy)
+      + ((gy2 + 3) // 4)
+      - ((gy2 + 99) // 100)
+      + ((gy2 + 399) // 400)
+      + gd
+      + g_d_m[gm - 1]
+  )
+  jy += 33 * (days // 12053)
+  days %= 12053
+  jy += 4 * (days // 1461)
+  days %= 1461
+  if days > 365:
+    jy += (days - 1) // 365
+    days = (days - 1) % 365
+  if days < 186:
+    jm = 1 + (days // 31)
+    jd = 1 + (days % 31)
+  else:
+    jm = 7 + ((days - 186) // 30)
+    jd = 1 + ((days - 186) % 30)
+  return jy, jm, jd
+
+
+def parse_and_convert_date(date_str):
+  try:
+    # فرمت‌های رایج سایت: "12 October 2026" یا "12 Oct 2026"
+    clean_date = date_str.strip()
+    dt = datetime.datetime.strptime(clean_date, "%d %B %Y")
+  except ValueError:
+    try:
+      dt = datetime.datetime.strptime(clean_date, "%d %b %Y")
+    except ValueError:
+      return date_str
+
+  weekdays_fa = [
+      "دوشنبه",
+      "سه‌شنبه",
+      "چهارشنبه",
+      "پنج‌شنبه",
+      "جمعه",
+      "شنبه",
+      "یکشنبه",
+  ]
+  months_fa = [
+      "فروردین",
+      "اردیبهشت",
+      "خرداد",
+      "تیر",
+      "مرداد",
+      "شهریور",
+      "مهر",
+      "آبان",
+      "آذر",
+      "دی",
+      "بهمن",
+      "اسفند",
+  ]
+
+  day_name = weekdays_fa[dt.weekday()]
+  jy, jm, jd = gregorian_to_jalali(dt.year, dt.month, dt.day)
+
+  now_tehran = datetime.datetime.now(TEHRAN_TZ).strftime("%H:%M")
+  return (
+      f"{date_str}\n📅 <b>تاریخ شمسی:</b> {day_name} {jd} {months_fa[jm-1]}"
+      f" {jy} (ساعت استعلام: {now_tehran} به وقت تهران)"
+  )
+
+
+# ==================== نصب اتوماتیک مرورگر ====================
 def ensure_playwright_browsers():
   try:
     subprocess.run(
@@ -54,7 +137,7 @@ def ensure_playwright_browsers():
 ensure_playwright_browsers()
 
 
-# ==================== مدیریت دیتابیس (Async & WAL) ====================
+# ==================== مدیریت دیتابیس ====================
 def get_db_connection():
   conn = sqlite3.connect(DB_PATH, timeout=30.0)
   conn.execute("PRAGMA journal_mode=WAL;")
@@ -73,7 +156,8 @@ def _init_db_sync():
                 selected_dates TEXT,
                 last_seats TEXT,
                 cached_snapshot TEXT,
-                error_notified INTEGER DEFAULT 0
+                error_notified INTEGER DEFAULT 0,
+                consecutive_errors INTEGER DEFAULT 0
             )
         """)
     cursor.execute("""
@@ -99,13 +183,15 @@ def _save_monitor_sync(
     last_seats,
     cached_snapshot,
     error_notified,
+    consecutive_errors=0,
 ):
   with get_db_connection() as conn:
     cursor = conn.cursor()
     cursor.execute(
         """
-            INSERT OR REPLACE INTO monitors (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO monitors 
+            (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified, consecutive_errors)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             chat_id,
@@ -116,6 +202,7 @@ def _save_monitor_sync(
             last_seats,
             cached_snapshot,
             error_notified,
+            consecutive_errors,
         ),
     )
     conn.commit()
@@ -130,6 +217,7 @@ async def save_monitor(
     last_seats="",
     cached_snapshot="",
     error_notified=0,
+    consecutive_errors=0,
 ):
   await asyncio.to_thread(
       _save_monitor_sync,
@@ -141,6 +229,7 @@ async def save_monitor(
       last_seats,
       cached_snapshot,
       error_notified,
+      consecutive_errors,
   )
 
 
@@ -149,8 +238,8 @@ def _get_monitor_sync(chat_id):
     cursor = conn.cursor()
     cursor.execute(
         "SELECT mode, target_date, selected_dates, last_seats,"
-        " cached_snapshot, username, error_notified FROM monitors WHERE chat_id"
-        " = ?",
+        " cached_snapshot, username, error_notified, consecutive_errors FROM"
+        " monitors WHERE chat_id = ?",
         (chat_id,),
     )
     row = cursor.fetchone()
@@ -163,6 +252,7 @@ def _get_monitor_sync(chat_id):
           "cached_snapshot": row[4].split(",") if row[4] else [],
           "username": row[5],
           "error_notified": row[6],
+          "consecutive_errors": row[7],
       }
   return None
 
@@ -171,18 +261,23 @@ async def get_monitor(chat_id):
   return await asyncio.to_thread(_get_monitor_sync, chat_id)
 
 
-def _update_error_status_sync(chat_id, status_value):
+def _update_error_status_sync(chat_id, status_value, consecutive_errors=0):
   with get_db_connection() as conn:
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE monitors SET error_notified = ? WHERE chat_id = ?",
-        (status_value, chat_id),
+        "UPDATE monitors SET error_notified = ?, consecutive_errors = ? WHERE"
+        " chat_id = ?",
+        (status_value, consecutive_errors, chat_id),
     )
     conn.commit()
 
 
-async def update_error_status(chat_id, status_value):
-  await asyncio.to_thread(_update_error_status_sync, chat_id, status_value)
+async def update_error_status(
+    chat_id, status_value, consecutive_errors=0
+):
+  await asyncio.to_thread(
+      _update_error_status_sync, chat_id, status_value, consecutive_errors
+  )
 
 
 def _remove_monitor_sync(chat_id):
@@ -201,7 +296,8 @@ def _get_all_monitors_sync():
     cursor = conn.cursor()
     cursor.execute(
         "SELECT chat_id, username, mode, target_date, selected_dates,"
-        " last_seats, cached_snapshot, error_notified FROM monitors"
+        " last_seats, cached_snapshot, error_notified, consecutive_errors FROM"
+        " monitors"
     )
     rows = cursor.fetchall()
     result = {}
@@ -214,6 +310,7 @@ def _get_all_monitors_sync():
           "last_seats": row[5],
           "cached_snapshot": row[6].split(",") if row[6] else [],
           "error_notified": row[7],
+          "consecutive_errors": row[8],
       }
     return result
 
@@ -247,10 +344,8 @@ def _record_failed_attempt_sync(chat_id):
   status = _get_admin_status_sync(chat_id)
   attempts = status["attempts"] + 1
   lockout_until = status["lockout_until"]
-
   if attempts >= 3:
     lockout_until = time.time() + 1800
-
   with get_db_connection() as conn:
     cursor = conn.cursor()
     cursor.execute(
@@ -276,7 +371,7 @@ async def reset_admin_attempts(chat_id):
   await asyncio.to_thread(_reset_admin_attempts_sync, chat_id)
 
 
-# ==================== وب‌سرور جهت زنده نگه داشتن در Render ====================
+# ==================== وب‌سرور جهت زنده نگه داشتن ====================
 flask_app = Flask(__name__)
 
 
@@ -382,8 +477,7 @@ class StatusTracker:
       if self.steps:
         self.steps[-1] = f"❌ {step_text}"
       if error_msg:
-        safe_err = html.escape(str(error_msg)[:200])
-        self.steps.append(f"\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>")
+        self.steps.append(f"\n⚠️ <b>علت خطا:</b> {html.escape(error_msg)}")
 
     full_text = "⚙️ <b>وضعیت پردازش:</b>\n\n" + "\n".join(self.steps)
     try:
@@ -396,6 +490,19 @@ class StatusTracker:
       await self.message.delete()
     except Exception:
       pass
+
+
+# ==================== ساده‌سازی خطاهای سیستم ====================
+def simplify_error_message(raw_error: str) -> str:
+  err = str(raw_error)
+  if "Timeout 30000ms exceeded" in err or "waiting for locator" in err:
+    return "تایم‌آوت در پاسخگویی منوهای سایت NAATI"
+  elif "net::ERR_" in err or "Navigation failed" in err:
+    return "اختلال در شبکه یا عدم دسترسی به سایت NAATI"
+  elif "Target closed" in err or "Browser closed" in err:
+    return "بسته شدن ناگهانی مرورگر سرور"
+  else:
+    return "اختلال موقت در بارگذاری اطلاعات سایت"
 
 
 # ==================== دریافت داده‌ها از NAATI ====================
@@ -417,7 +524,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
           ],
       )
       context = await browser.new_context()
-      page = await context.new_page()
+      page = await context.close() if False else await context.new_page()
 
       if tracker:
         await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
@@ -425,30 +532,35 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
 
       await page.goto(
           "https://www.naati.com.au/test-date/",
-          wait_until="networkidle",
+          wait_until="domcontentloaded",
           timeout=45000,
       )
       if tracker:
         await tracker.update("باز کردن سایت NAATI", "success")
         await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
 
-      selects = page.locator("select")
-      await selects.nth(0).wait_for(timeout=10000)
-      await selects.nth(0).select_option(
+      select_ccl = page.locator("select").nth(0)
+      await select_ccl.wait_for(state="attached", timeout=15000)
+      await select_ccl.select_option(
           label="Credentialed Community Language Test"
       )
-      await page.wait_for_timeout(1000)
+
       if tracker:
         await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
         await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
 
-      await selects.nth(1).select_option(label="Persian")
-      await page.wait_for_timeout(1500)
+      # حل مشکل تایم‌آوت: انتظار برای فعال شدن منوی دوم زبان
+      select_lang = page.locator("select").nth(1)
+      await page.wait_for_function(
+          '!document.querySelectorAll("select")[1].disabled', timeout=20000
+      )
+      await select_lang.select_option(label="Persian")
+
       if tracker:
         await tracker.update("اعمال فیلتر زبان (Persian)", "success")
         await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
 
-      await page.wait_for_selector("table tbody tr", timeout=10000)
+      await page.wait_for_selector("table tbody tr", timeout=15000)
       rows = await page.query_selector_all("table tbody tr")
 
       all_dates = []
@@ -475,16 +587,17 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
       return all_dates, None
 
     except Exception as e:
-      error_details = str(e)
-      logging.error(f"Error fetching data: {error_details}")
+      raw_err = str(e)
+      logging.error(f"Error fetching data: {raw_err}")
+      simple_err = simplify_error_message(raw_err)
       if tracker:
-        last_step_text = (
+        last_step = (
             tracker.steps[-1].replace("⏳ ", "").replace("...", "")
             if tracker.steps
             else "پردازش"
         )
-        await tracker.update(last_step_text, "failed", error_details)
-      return None, error_details
+        await tracker.update(last_step, "failed", simple_err)
+      return None, simple_err
     finally:
       if context:
         await context.close()
@@ -536,21 +649,23 @@ async def show_status(chat_id):
 
   mode = monitor_info.get("mode")
   if mode == "single":
-    d = html.escape(str(monitor_info["target_date"]))
+    d_conv = parse_and_convert_date(monitor_info["target_date"])
     s = html.escape(str(monitor_info["last_seats"]))
     return (
-        f"🟢 <b>پایش تکی فعال است:</b>\n\n📅 تاریخ: <code>{d}</code>\n💺 آخرین"
-        f" ظرفیت ثبت‌شده: <b>{s}</b>\nℹ️ <i>شرط:</i> اعلام تغییر ظرفیت + باز شدن"
+        f"🟢 <b>پایش تکی فعال است:</b>\n\n🔹 {d_conv}\n💺 آخرین ظرفیت"
+        f" ثبت‌شده: <b>{s}</b>\nℹ️ <i>شرط:</i> اعلام تغییر ظرفیت + باز شدن"
         " تاریخ جدید در محدوده ±4 سطر"
     )
   elif mode == "multi":
     dates_list = [
-        html.escape(d) for d in monitor_info.get("selected_dates", [])
+        parse_and_convert_date(d)
+        for d in monitor_info.get("selected_dates", [])
     ]
     seats_info = html.escape(str(monitor_info["last_seats"]))
+    formatted_dates = "\n\n".join([f"• {d}" for d in dates_list])
     return (
         "🟢 <b>پایش چندتایی فعال است:</b>\n\n📅 تاریخ‌های تحت"
-        f" پایش:\n<code>{', '.join(dates_list)}</code>\n💺 آخرین وضعیت"
+        f" پایش:\n{formatted_dates}\n\n💺 آخرین وضعیت"
         f" ظرفیت‌ها:\n<b>{seats_info}</b>"
     )
 
@@ -576,6 +691,21 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
       or update.effective_user.first_name
       or "Unknown"
   )
+
+  if query.data.startswith("admin_cancel_"):
+    target_chat_id = int(query.data.split("_")[-1])
+    await remove_monitor(target_chat_id)
+    try:
+      await context.bot.send_message(
+          chat_id=target_chat_id,
+          text="🛑 <b>پایش شما توسط مدیر سیستم متوقف شد.</b>",
+          parse_mode="HTML",
+          reply_markup=await get_main_inline_keyboard(target_chat_id),
+      )
+    except Exception:
+      pass
+    await send_admin_panel_details(context, chat_id, query.message)
+    return
 
   if query.data == "btn_main":
     USER_TEMP_SELECTIONS.pop(chat_id, None)
@@ -632,20 +762,15 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await tracker.delete_status_message()
 
     if not data:
-      safe_err = (
-          html.escape(str(error_err)[:250])
-          if error_err
-          else "عدم پاسخگویی سرور NAATI"
-      )
       await context.bot.send_message(
           chat_id,
           "❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ <b>علت"
-          f" خطا:</b>\n<code>{safe_err}</code>",
+          f" خطا:</b> {html.escape(error_err)}",
           parse_mode="HTML",
           reply_markup=get_error_retry_keyboard(),
       )
     else:
-      await update_error_status(chat_id, 0)
+      await update_error_status(chat_id, 0, 0)
       await context.bot.send_message(
           chat_id,
           "✅ <b>اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.</b>",
@@ -668,15 +793,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await safe_delete_message(context, chat_id, current_msg_id)
 
     if not data:
-      safe_err = (
-          html.escape(str(error_err)[:250])
-          if error_err
-          else "عدم پاسخگویی سرور NAATI"
-      )
       await context.bot.send_message(
           chat_id,
           "❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n⚠️ <b>علت"
-          f" خطا:</b>\n<code>{safe_err}</code>",
+          f" خطا:</b> {html.escape(error_err)}",
           parse_mode="HTML",
           reply_markup=get_error_retry_keyboard(),
       )
@@ -686,10 +806,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = "🗓 <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n\n"
     for idx, item in enumerate(data, 1):
+      date_converted = parse_and_convert_date(item["date"])
       msg += (
-          f"{idx}. 📍 <code>{html.escape(item['location'])}</code> | 📅"
-          f" <code>{html.escape(item['date'])}</code> | 💺"
-          f" <b>{html.escape(item['seats'])}</b>\n"
+          f"{idx}. 📍 <code>{html.escape(item['location'])}</code> | 💺"
+          f" <b>{html.escape(item['seats'])}</b>\n🔹"
+          f" {date_converted}\n━━━━━━━━━━━━━━━━━━━\n"
       )
 
     msg += "\n👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>"
@@ -750,16 +871,17 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         last_seats=selected_item["seats"],
         cached_snapshot=cached_snapshot,
         error_notified=0,
+        consecutive_errors=0,
     )
 
-    d_safe = html.escape(selected_item["date"])
+    d_conv = parse_and_convert_date(selected_item["date"])
     s_safe = html.escape(selected_item["seats"])
 
     await context.bot.send_message(
         chat_id,
-        "✅ <b>پایش تکی فعال شد!</b>\n\n📅 تاریخ انتخابی:"
-        f" <code>{d_safe}</code>\n💺 ظرفیت فعلی: <b>{s_safe}</b>\n\nℹ️ <i>در"
-        " صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.</i>",
+        f"✅ <b>پایش تکی فعال شد!</b>\n\n🔹 {d_conv}\n💺 ظرفیت فعلی:"
+        f" <b>{s_safe}</b>\n\nℹ️ <i>در صورت تغییر ظرفیت یا اضافه شدن تاریخ"
+        " جدید اطلاع داده می‌شود.</i>",
         parse_mode="HTML",
         reply_markup=get_single_main_menu_keyboard(),
     )
@@ -813,10 +935,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected_dates=",".join(selected_dates),
         last_seats=last_seats,
         error_notified=0,
+        consecutive_errors=0,
     )
 
-    dates_str = "\n".join(
-        [f"• <code>{html.escape(d)}</code>" for d in selected_dates]
+    dates_str = "\n\n".join(
+        [f"• {parse_and_convert_date(d)}" for d in selected_dates]
     )
 
     await context.bot.send_message(
@@ -947,6 +1070,8 @@ async def send_admin_panel_details(
     msg += f"📊 تعداد کل پایش‌های فعال: <b>{total_users}</b>\n"
     msg += "━━━━━━━━━━━━━━━━━━━\n\n"
 
+    keyboard = []
+
     if not monitors:
       msg += "📭 هیچ پایش فعالی وجود ندارد."
     else:
@@ -960,28 +1085,32 @@ async def send_admin_panel_details(
         mode_str = "🎯 تکی" if info["mode"] == "single" else "☑️ چندتایی"
 
         if info["mode"] == "single":
-          t_date = html.escape(str(info["target_date"]))
+          t_date = parse_and_convert_date(info["target_date"])
           l_seats = html.escape(str(info["last_seats"]))
-          details = (
-              f"تاریخ: <code>{t_date}</code> | آخرین ظرفیت: <b>{l_seats}</b>"
-          )
+          details = f"تاریخ: {t_date} | آخرین ظرفیت: <b>{l_seats}</b>"
         else:
-          sel_dates = [html.escape(d) for d in info["selected_dates"]]
-          details = f"تاریخ‌ها: <code>{', '.join(sel_dates)}</code>"
+          sel_dates = [
+              parse_and_convert_date(d) for d in info["selected_dates"]
+          ]
+          details = f"تاریخ‌ها:\n" + "\n".join(sel_dates)
 
         msg += (
             f"👤 کاربر: {user_str}\nنوع: {mode_str}\nجزئیات:"
-            f" {details}\n\n"
+            f" {details}\n━━━━━━━━━━━━━━━━━━━\n"
         )
-
-    keyboard = [
-        [
+        keyboard.append([
             InlineKeyboardButton(
-                "🔄 بروزرسانی پنل", callback_data="admin_refresh"
+                f"🛑 لغو پایش کاربر ({raw_uname})",
+                callback_data=f"admin_cancel_{cid}",
             )
-        ],
-        [InlineKeyboardButton("🔙 خروج", callback_data="btn_main")],
-    ]
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton("🔄 بروزرسانی پنل", callback_data="admin_refresh")
+    ])
+    keyboard.append(
+        [InlineKeyboardButton("🔙 خروج", callback_data="btn_main")]
+    )
 
     if message_to_edit:
       await message_to_edit.edit_text(
@@ -1021,35 +1150,51 @@ async def global_monitoring_loop(app):
 
       if not data:
         logging.warning(f"Monitoring fetch failed: {fetch_err}")
-        safe_err = (
-            html.escape(str(fetch_err)[:250])
-            if fetch_err
-            else "عدم پاسخگویی یا قطع اتصال سرور NAATI"
-        )
 
         for chat_id, monitor_info in monitors.items():
-          if monitor_info.get("error_notified", 0) == 0:
+          err_count = monitor_info.get("consecutive_errors", 0) + 1
+
+          if err_count >= 5:
+            await remove_monitor(chat_id)
             try:
               await app.bot.send_message(
                   chat_id=chat_id,
                   text=(
-                      "❌ <b>خطا در پایش درخواست شما!</b>\n\nدر میانه زمان"
-                      " پایش، ربات نتوانست وارد سایت شود یا داده‌ها را بررسی"
-                      f" کند.\n\n⚠️ <b>علت خطا:</b>\n<code>{safe_err}</code>"
+                      "🛑 <b>پایش شما متوقف شد!</b>\n\nبه دلیل بروز ۵ بار خطای"
+                      " متوالی در ارتباط با سایت NAATI طی یک ساعت گذشته ("
+                      f"<code>{html.escape(fetch_err)}</code>)، پایش شما به"
+                      " طور خودکار لغو گردید.\n\nلطفاً در صورت تمایل مجدداً"
+                      " اقدام به فعال‌سازی پایش نمایید."
                   ),
                   parse_mode="HTML",
-                  reply_markup=get_error_retry_keyboard(),
+                  reply_markup=await get_main_inline_keyboard(chat_id),
               )
-              await update_error_status(chat_id, 1)
             except Exception as send_err:
-              logging.error(
-                  f"Failed to send error notification to {chat_id}: {send_err}"
-              )
+              logging.error(f"Failed to send cancellation alert: {send_err}")
+          else:
+            await update_error_status(chat_id, 1, err_count)
+            if monitor_info.get("error_notified", 0) == 0:
+              try:
+                await app.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "❌ <b>خطا در پایش درخواست شما!</b>\n\nعلت خطا:"
+                        f" <code>{html.escape(fetch_err)}</code>\n (تعداد خطای"
+                        f" متوالی: {err_count}/5)"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=get_error_retry_keyboard(),
+                )
+              except Exception as send_err:
+                logging.error(f"Failed to send error alert: {send_err}")
         continue
 
       for chat_id, monitor_info in monitors.items():
-        if monitor_info.get("error_notified", 0) == 1:
-          await update_error_status(chat_id, 0)
+        if (
+            monitor_info.get("error_notified", 0) == 1
+            or monitor_info.get("consecutive_errors", 0) > 0
+        ):
+          await update_error_status(chat_id, 0, 0)
 
         mode = monitor_info.get("mode")
 
@@ -1077,13 +1222,14 @@ async def global_monitoring_loop(app):
                   last_seats=curr_seats,
                   cached_snapshot=",".join(monitor_info["cached_snapshot"]),
                   error_notified=0,
+                  consecutive_errors=0,
               )
+              d_conv = parse_and_convert_date(target_date)
               await send_alert(
                   app,
                   chat_id,
-                  "🔔 <b>تغییر ظرفیت تاریخ انتخابی:</b>\n\n📅 تاریخ:"
-                  f" <code>{html.escape(target_date)}</code>\n💺 ظرفیت جدید:"
-                  f" <b>{html.escape(curr_seats)}</b>",
+                  "🔔 <b>تغییر ظرفیت تاریخ انتخابی:</b>\n\n🔹"
+                  f" {d_conv}\n💺 ظرفیت جدید: <b>{html.escape(curr_seats)}</b>",
               )
 
             start_idx = max(0, current_idx - 4)
@@ -1105,12 +1251,14 @@ async def global_monitoring_loop(app):
                   last_seats=curr_seats,
                   cached_snapshot=",".join(updated_snapshot),
                   error_notified=0,
+                  consecutive_errors=0,
               )
               msg_new = "🔥 <b>تاریخ جدید در محدوده ±4 سطر یافت شد!</b>\n\n"
               for item in new_found:
+                d_conv = parse_and_convert_date(item["date"])
                 msg_new += (
-                    f"📅 تاریخ: <code>{html.escape(item['date'])}</code> | 💺"
-                    f" ظرفیت: <b>{html.escape(item['seats'])}</b>\n"
+                    f"🔹 {d_conv} | 💺 ظرفیت:"
+                    f" <b>{html.escape(item['seats'])}</b>\n\n"
                 )
               await send_alert(app, chat_id, msg_new)
 
@@ -1139,9 +1287,10 @@ async def global_monitoring_loop(app):
               if c_seats != prev_s:
                 changes_detected = True
                 updated_seats_dict[s_date] = c_seats
+                d_conv = parse_and_convert_date(s_date)
                 msg_multi += (
-                    f"📅 تاریخ: <code>{html.escape(s_date)}</code> | ظرفیت جدید:"
-                    f" <b>{html.escape(c_seats)}</b>\n"
+                    f"🔹 {d_conv} | ظرفیت جدید:"
+                    f" <b>{html.escape(c_seats)}</b>\n\n"
                 )
 
           if changes_detected:
@@ -1155,6 +1304,7 @@ async def global_monitoring_loop(app):
                 selected_dates=",".join(selected_dates),
                 last_seats=new_seats_str,
                 error_notified=0,
+                consecutive_errors=0,
             )
             await send_alert(app, chat_id, msg_multi)
 
@@ -1170,11 +1320,7 @@ async def post_init(app):
 
 def main():
   if not TELEGRAM_TOKEN:
-    logging.critical(
-        "❌ توکن ربات پیدا نشد! متغیر محیطی BOT_TOKEN در Render تنظیم نشده"
-        " است."
-    )
-    # جهت جلوگیری از ری‌استارت ناخواسته، ۵ دقیقه برنامه‌دار می‌ماند و متوقف می‌شود
+    logging.critical("❌ توکن ربات پیدا نشد!")
     time.sleep(300)
     sys.exit(1)
 
