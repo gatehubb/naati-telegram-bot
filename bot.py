@@ -1,11 +1,9 @@
 import os
 import logging
-import requests
-from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# تنظیمات سیستم ثبت لاگ
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -14,69 +12,101 @@ logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get("BOT_TOKEN")
 
-def fetch_ccl_dates():
-    """دریافت مستقیم و سریع اطلاعات از سایت cclpanel"""
-    url = "https://cclpanel.com/"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+async def fetch_naati_dates():
+    """ورود به سایت NAATI، تنظیم 3 فیلتر و استخراج جدول ظرفیت‌ها"""
+    url = "https://www.naati.com.au/test-date/"
     
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return None, f"خطا در برقراری ارتباط با سایت (کد وضعیت: {response.status_code})"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = await context.new_page()
         
-        soup = BeautifulSoup(response.text, 'html.parser')
-        rows = soup.find_all('tr')
-        dates_info = []
+        try:
+            # ۱. باز کردن صفحه
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            
+            # ۲. انتخاب Test Type -> Credentialed Community Language Test
+            test_type_select = page.locator("select").nth(0)
+            await test_type_select.wait_for(state="visible", timeout=10000)
+            await test_type_select.select_option(label="Credentialed Community Language Test")
+            await page.wait_for_timeout(1000)
 
-        for row in rows:
-            text = row.get_text(separator=' ', strip=True)
-            if "Persian" in text or "فارسی" in text:
-                dates_info.append(text)
+            # ۳. انتخاب Language -> Persian
+            lang_select = page.locator("select").nth(1)
+            await lang_select.select_option(label="Persian")
+            await page.wait_for_timeout(1000)
 
-        return dates_info, None
-    except requests.exceptions.Timeout:
-        return None, "زمان پاسخ‌دهی سایت به پایان رسید (Timeout)."
-    except Exception as e:
-        logger.error(f"Error fetching data: {e}")
-        return None, "خطایی در استخراج اطلاعات رخ داد."
+            # ۴. انتخاب Location -> ONLINE - Online
+            loc_select = page.locator("select").nth(2)
+            await loc_select.select_option(label="ONLINE - Online")
+            
+            # ۵. مکث کوتاه برای به‌روزرسانی جدول AJAX
+            await page.wait_for_timeout(2000)
+
+            # ۶. استخراج سطر‌های جدول
+            rows = await page.locator("tbody tr").all()
+            results = []
+
+            for row in rows:
+                cells = await row.locator("td").all_text_contents()
+                if len(cells) >= 5:
+                    test_type = cells[0].strip()
+                    language = cells[1].strip()
+                    location = cells[2].strip()
+                    date_time = cells[3].strip()
+                    seats = cells[4].strip()
+
+                    # قالب‌بندی خروجی هر سطر
+                    results.append(
+                        f"📅 **تاریخ و زمان:** `{date_time}`\n"
+                        f"🪑 **ظرفیت باقی‌مانده:** `{seats}`\n"
+                        f"📍 **مکان:** {location}"
+                    )
+
+            await browser.close()
+            return results, None
+
+        except Exception as e:
+            logger.error(f"Playwright automation error: {e}")
+            await browser.close()
+            return None, f"خطا در دریافت اطلاعات از سایت NAATI: {str(e)}"
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پیام خوش‌آمدگویی همراه با دکمه شیشه‌ای"""
     keyboard = [
         [InlineKeyboardButton("📅 بررسی ظرفیت‌های آنلاین CCL", callback_data="check_dates")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "سلام! به ربات استعلام خودکار تاریخ‌های آزمون NAATI خوش آمدید.\n\n"
-        "برای مشاهده جدیدترین ظرفیت‌های فعال زبان فارسی، روی دکمه زیر کلیک کنید:",
+        "برای مشاهده جدیدترین ظرفیت‌های فعال، روی دکمه زیر کلیک کنید:",
         reply_markup=reply_markup
     )
 
 async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت کلیک دکمه و به‌روزرسانی وضعیت"""
     query = update.callback_query
     await query.answer()
 
     if query.data == "check_dates":
-        # ارسال پیام اولیه و ذخیره آن برای ویرایش بعدی
-        status_msg = await query.message.reply_text("🔄 در حال اتصال و استخراج اطلاعات ظرفیت‌ها...")
+        status_msg = await query.message.reply_text("🔄 در حال ورود به سایت NAATI و فیلتر کردن ظرفیت‌های فارسی...")
         
-        dates, error = fetch_ccl_dates()
+        dates, error = await fetch_naati_dates()
 
         if error:
             await status_msg.edit_text(f"❌ {error}")
         elif dates:
-            formatted_dates = "\n\n".join([f"🔹 {d}" for d in dates])
-            await status_msg.edit_text(f"✅ **جدیدترین ظرفیت‌های موجود:**\n\n{formatted_dates}", parse_mode="Markdown")
+            output_text = "✅ **جدیدترین ظرفیت‌های یافت‌شده (CCL - Persian - Online):**\n\n" + "\n\n-------------------\n\n".join(dates)
+            await status_msg.edit_text(output_text, parse_mode="Markdown")
         else:
-            await status_msg.edit_text("ℹ️ در حال حاضر هیچ ظرفیت جدیدی برای زبان فارسی یافت نشد.")
+            await status_msg.edit_text("ℹ️ در حال حاضر هیچ تاریخ آزمونی برای این فیلترها یافت نشد.")
 
 def main():
-    """اجرای اصلی ربات"""
     if not TOKEN:
-        logger.error("خطا: متغیر BOT_TOKEN یافت نشد!")
+        logger.error("خطا: متغیر BOT_TOKEN در Environment پیدا نشد!")
         return
 
     app = Application.builder().token(TOKEN).build()
