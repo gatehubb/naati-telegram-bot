@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# تنظیمات لاگینگ برای پایش خطاهای برنامه
+# تنظیمات سیستم ثبت لاگ
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 TOKEN = os.environ.get("BOT_TOKEN")
 
 def fetch_ccl_dates():
-    """استخراج ظرفیت‌های آزمون از سایت cclpanel با استفاده از requests و BeautifulSoup"""
+    """دریافت مستقیم و سریع اطلاعات از سایت cclpanel"""
     url = "https://cclpanel.com/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -43,7 +43,7 @@ def fetch_ccl_dates():
         return None, "خطایی در استخراج اطلاعات رخ داد."
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ارسال پیام خوش‌آمدگویی و دکمه شیشه‌ای"""
+    """ارسال پیام خوش‌آمدگویی همراه با دکمه شیشه‌ای"""
     keyboard = [
         [InlineKeyboardButton("📅 بررسی ظرفیت‌های آنلاین CCL", callback_data="check_dates")]
     ]
@@ -55,12 +55,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت کلیک روی دکمه شیشه‌ای"""
+    """مدیریت کلیک دکمه و به‌روزرسانی وضعیت"""
     query = update.callback_query
     await query.answer()
 
     if query.data == "check_dates":
-        status_msg = await query.message.reply_text("🔄 در حال دریافت جدیدترین اطلاعات ظرفیت‌ها...")
+        # ارسال پیام اولیه و ذخیره آن برای ویرایش بعدی
+        status_msg = await query.message.reply_text("🔄 در حال اتصال و استخراج اطلاعات ظرفیت‌ها...")
         
         dates, error = fetch_ccl_dates()
 
@@ -73,9 +74,9 @@ async def handle_button_click(update: Update, context: ContextTypes.DEFAULT_TYPE
             await status_msg.edit_text("ℹ️ در حال حاضر هیچ ظرفیت جدیدی برای زبان فارسی یافت نشد.")
 
 def main():
-    """شروع به کار ربات تلگرام"""
+    """اجرای اصلی ربات"""
     if not TOKEN:
-        logger.error("خطا: متغیر BOT_TOKEN تنظیم نشده است!")
+        logger.error("خطا: متغیر BOT_TOKEN یافت نشد!")
         return
 
     app = Application.builder().token(TOKEN).build()
@@ -83,7 +84,6 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_button_click))
 
     logger.info("Bot started successfully...")
-    # پارامتر drop_pending_updates مانع خطای Conflict هنگام دیپلوی مجدد می‌شود
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
