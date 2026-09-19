@@ -4,17 +4,9 @@ import logging
 import os
 import re
 import sqlite3
-import subprocess
-import sys
 import threading
 import time
 from datetime import datetime, timedelta
-
-# سازگاری کامل zoneinfo
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    from backports.zoneinfo import ZoneInfo
 
 from flask import Flask
 from playwright.async_api import async_playwright
@@ -28,24 +20,24 @@ from telegram.ext import (
     filters,
 )
 
-# تنظیمات Logging
+# ==================== تنظیمات LOGGING ====================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# کلیدهای محیطی
+# ==================== کلیدها و ثابت‌ها ====================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8708901411:AAEg1MJrXj4t8zs_KOuYwHMfAW1kZemQTew")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "2377451")
 DB_NAME = "naati_bot.db"
 
-# راه‌اندازی سرور Flask جهت زنده نگه داشتن Render
+# ==================== SERVER جهت زنده نگه داشتن RENDER ====================
 app_web = Flask(__name__)
 
 @app_web.route('/')
 def home():
-    return "NAATI Monitor Bot is Active", 200
+    return "NAATI Monitor Bot is Online", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
@@ -53,7 +45,53 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# ==================== دیتابیس ====================
+# ==================== تبدیل تاریخ میلادی به شمسی ====================
+def gregorian_to_jalali(gy, gm, gd):
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = (gy + 1) if gm > 2 else gy
+    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) + g_d_m[gm - 1] + gd - 1
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + (days // 31)
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + ((days - 186) // 30)
+        jd = 1 + ((days - 186) % 30)
+    return jy, jm, jd
+
+def parse_and_format_date(date_str):
+    """
+    تبدیل تاریخ متنی مانند '15 October 2026' به شمسی و روزهای باقیمانده
+    """
+    try:
+        # پاکسازی متن
+        clean_str = re.sub(r'[^\w\s]', '', date_str).strip()
+        dt = datetime.strptime(clean_str, "%d %B %Y")
+        jy, jm, jd = gregorian_to_jalali(dt.year, dt.month, dt.day)
+        
+        days_left = (dt.date() - datetime.now().date()).days
+        days_left_str = f"{days_left} روز دیگر" if days_left >= 0 else "گذشته"
+        
+        months_fa = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+        shamsi_str = f"{jd} {months_fa[jm-1]} {jy}"
+        
+        return f"📅 {date_str} ({shamsi_str}) - ⏳ {days_left_str}"
+    except Exception:
+        return f"📅 {date_str}"
+
+# ==================== مدیریت پایگاه داده (SQLITE) ====================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -61,7 +99,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS active_monitors (
             user_id INTEGER PRIMARY KEY,
             chat_id INTEGER,
-            interval INTEGER,
+            selected_dates TEXT,
+            interval INTEGER DEFAULT 300,
             last_run TIMESTAMP,
             consecutive_errors INTEGER DEFAULT 0,
             first_error_time TIMESTAMP
@@ -72,14 +111,15 @@ def init_db():
 
 init_db()
 
-def add_monitor(user_id, chat_id, interval=300):
+def add_or_update_monitor(user_id, chat_id, selected_dates):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    dates_str = ",".join(selected_dates)
     cursor.execute("""
         INSERT OR REPLACE INTO active_monitors 
-        (user_id, chat_id, interval, last_run, consecutive_errors, first_error_time) 
-        VALUES (?, ?, ?, ?, 0, NULL)
-    """, (user_id, chat_id, interval, datetime.now().isoformat()))
+        (user_id, chat_id, selected_dates, interval, last_run, consecutive_errors, first_error_time) 
+        VALUES (?, ?, ?, 300, ?, 0, NULL)
+    """, (user_id, chat_id, dates_str, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
@@ -93,22 +133,18 @@ def remove_monitor(user_id):
 def get_all_monitors():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id, chat_id, interval, consecutive_errors, first_error_time FROM active_monitors")
+    cursor.execute("SELECT user_id, chat_id, selected_dates, consecutive_errors, first_error_time FROM active_monitors")
     rows = cursor.fetchall()
     conn.close()
     return rows
 
-def update_monitor_error_status(user_id, has_error):
+def update_error_status(user_id, has_error):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     now_str = datetime.now().isoformat()
     
     if not has_error:
-        cursor.execute("""
-            UPDATE active_monitors 
-            SET consecutive_errors = 0, first_error_time = NULL 
-            WHERE user_id = ?
-        """, (user_id,))
+        cursor.execute("UPDATE active_monitors SET consecutive_errors = 0, first_error_time = NULL WHERE user_id = ?", (user_id,))
     else:
         cursor.execute("SELECT consecutive_errors, first_error_time FROM active_monitors WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
@@ -117,29 +153,24 @@ def update_monitor_error_status(user_id, has_error):
             c_errors += 1
             if not f_time:
                 f_time = now_str
-            cursor.execute("""
-                UPDATE active_monitors 
-                SET consecutive_errors = ?, first_error_time = ? 
-                WHERE user_id = ?
-            """, (c_errors, f_time, user_id))
+            cursor.execute("UPDATE active_monitors SET consecutive_errors = ?, first_error_time = ? WHERE user_id = ?", (c_errors, f_time, user_id))
             
     conn.commit()
     conn.close()
 
-# ==================== مدیریت خطاهای هوشمند ====================
-def simplify_error_message(error_str: str) -> str:
-    """تبدیل خطاهای طولانی Playwright به نام‌های کوتاه و خوانا"""
+# ==================== خلاصه‌سازی خطاهای شبکه ====================
+def simplify_error(error_str: str) -> str:
     if "language-test-date" in error_str or "select_option" in error_str:
-        return "ERR_TIMEOUT_LANG_DISABLED (عدم پاسخگویی منوی انتخاب زبان سایت NAATI)"
+        return "ERR_TIMEOUT_LANG_DISABLED (کندی در منوی انتخاب زبان)"
     elif "Timeout" in error_str:
-        return "ERR_SITE_TIMEOUT (کندی یا عدم پاسخگویی سرور NAATI)"
+        return "ERR_SITE_TIMEOUT (عدم پاسخگویی سرور NAATI)"
     elif "net::ERR_" in error_str:
-        return "ERR_NETWORK_CONNECTION (اختلال در اتصال شبکه به سایت NAATI)"
+        return "ERR_NETWORK_DISCONNECTED (خطای اتصال شبکه)"
     else:
         first_line = error_str.split("\n")[0]
-        return f"ERR_UNKNOWN ({first_line[:80]}...)"
+        return f"ERR_UNKNOWN ({first_line[:50]}...)"
 
-# ==================== وب اسکرپینگ (Playwright) ====================
+# ==================== وب اسکرپر PLAYWRIGHT ====================
 async def scrape_naati_dates():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -153,33 +184,58 @@ async def scrape_naati_dates():
             await select_locator.wait_for(state="attached", timeout=30000)
             
             for _ in range(15):
-                is_disabled = await select_locator.is_disabled()
-                if not is_disabled:
+                if not await select_locator.is_disabled():
                     break
                 await asyncio.sleep(1)
                 
             await select_locator.select_option(value="Persian", timeout=15000)
             await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=20000)
             
-            content = await page.content()
+            # استخراج المان‌های تاریخ
+            items = await page.query_selector_all(".test-date-item")
+            extracted_dates = []
+            
+            if items:
+                for item in items:
+                    txt = await item.inner_text()
+                    txt_clean = txt.strip()
+                    if txt_clean:
+                        extracted_dates.append(txt_clean)
+            else:
+                # بررسی محتوای متنی کلی در صورت عدم وجود کلاس اختصاصی
+                all_text = await page.inner_text("#results-container")
+                lines = [line.strip() for line in all_text.split("\n") if line.strip()]
+                extracted_dates = [l for l in lines if "No test dates" not in l]
+            
             await browser.close()
-            return True, content, None
+            return True, extracted_dates, None
             
         except Exception as e:
             await browser.close()
-            simplified_err = simplify_error_message(str(e))
-            return False, None, simplified_err
+            return False, [], simplify_error(str(e))
 
-# ==================== دستورات تلگرام ====================
+# ==================== دستورات ربات تلگرام ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 **دستیار هوشمند پایش آزمون NAATI CCL**\n\n"
+        "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
+        "**امکانات ربات:**\n"
+        "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
+        "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
+        "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+        "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
+    )
+    
     keyboard = [
-        [InlineKeyboardButton("🔍 استخراج و پایش تاریخ‌های جدید", callback_data="start_monitor")],
-        [InlineKeyboardButton("⛔ لغو پایش فعال", callback_data="stop_monitor")]
+        [InlineKeyboardButton("⚪ استخراج و انتخاب تاریخ از NAATI", callback_data="fetch_dates")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await update.message.reply_text(
-        "سلام! به دستیار هوشمند پایش آزمون NAATI CCL خوش آمدید.\nلطفاً گزینه مورد نظر خود را انتخاب کنید:",
-        reply_markup=reply_markup
+        text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -188,74 +244,158 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     chat_id = query.message.chat_id
 
-    if query.data == "start_monitor":
-        add_monitor(user_id, chat_id)
-        await query.edit_message_text("✅ پایش خودکار با موفقیت فعال شد. ربات هر ۵ دقیقه وضعیت سایت را بررسی می‌کند.")
+    if query.data == "fetch_dates":
+        await query.edit_message_text("⏳ در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال... لطفاً شکیبا باشید.")
+        
+        success, dates, error_msg = await scrape_naati_dates()
+        
+        if not success:
+            keyboard = [[InlineKeyboardButton("🔄 تلاش مجدد", callback_data="fetch_dates")]]
+            await query.message.reply_text(
+                f"❌ **خطا در دریافت اطلاعات:**\n`{error_msg}`\n\nلطفاً چند لحظه بعد مجدداً تلاش کنید.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+
+        if not dates:
+            keyboard = [[InlineKeyboardButton("🔄 بروزرسانی مجدد", callback_data="fetch_dates")]]
+            await query.message.reply_text(
+                "⚠️ **در حال حاضر هیچ تاریخ آزمون فعالی برای زبان فارسی ثبت نشده است.**",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode="Markdown"
+            )
+            return
+
+        # ذخیره تاریخ‌های استخراج شده در context کاربر
+        context.user_data["extracted_dates"] = dates
+        context.user_data["selected_indices"] = []
+
+        msg = "📋 **تاریخ‌های فعال یافت شده:**\n\n"
+        keyboard = []
+        for idx, d in enumerate(dates):
+            formatted_date = parse_and_format_date(d)
+            msg += f"{idx + 1}. {formatted_date}\n"
+            keyboard.append([InlineKeyboardButton(f"پایش تاریخ {idx + 1}", callback_data=f"toggle_date_{idx}")])
+
+        keyboard.append([InlineKeyboardButton("🚀 پایش همه تاریخ‌ها", callback_data="monitor_all")])
+        keyboard.append([InlineKeyboardButton("❌ لغو پایش‌های فعال", callback_data="stop_monitor")])
+
+        await query.message.reply_text(
+            msg + "\n👇 جهت انتخاب تاریخ برای پایش خودکار، دکمه مورد نظر را لمس کنید:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
+        )
+
+    elif query.data.startswith("toggle_date_"):
+        idx = int(query.data.split("_")[2])
+        extracted = context.user_data.get("extracted_dates", [])
+        
+        if idx < len(extracted):
+            target_date = extracted[idx]
+            selected = context.user_data.get("selected_indices", [])
+            
+            if idx in selected:
+                selected.remove(idx)
+            else:
+                if len(selected) >= 4:
+                    await query.answer("⚠️ حداکثر می‌توانید ۴ تاریخ را همزمان انتخاب کنید.", show_alert=True)
+                    return
+                selected.append(idx)
+            
+            context.user_data["selected_indices"] = selected
+            
+            if selected:
+                chosen_dates = [extracted[i] for i in selected]
+                add_or_update_monitor(user_id, chat_id, chosen_dates)
+                await query.answer(f"✅ پایش برای {len(chosen_dates)} تاریخ فعال شد.", show_alert=True)
+            else:
+                remove_monitor(user_id)
+                await query.answer("❌ پایش غیرفعال شد.", show_alert=True)
+
+    elif query.data == "monitor_all":
+        extracted = context.user_data.get("extracted_dates", [])
+        if extracted:
+            chosen_dates = extracted[:4] # حداکثر ۴ تاریخ
+            add_or_update_monitor(user_id, chat_id, chosen_dates)
+            await query.edit_message_text(
+                f"✅ **پایش خودکار فعال شد!**\n\nربات هر ۵ دقیقه ظرفیت آزمون‌های زیر را بررسی کرده و در صورت تغییر اطلاع خواهد داد:\n\n" +
+                "\n".join([parse_and_format_date(d) for d in chosen_dates]),
+                parse_mode="Markdown"
+            )
+
     elif query.data == "stop_monitor":
         remove_monitor(user_id)
-        await query.edit_message_text("❌ پایش خودکار شما غیرفعال شد.")
+        await query.edit_message_text("⛔ **پایش خودکار شما کاملاً غیرفعال گردید.**")
 
 # ==================== پنل مدیریت ادمین ====================
 async def admin_cancel_monitors(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
     args = context.args
-    
     if not args or args[0] != ADMIN_PASSWORD:
-        await update.message.reply_text("⛔ رمز عبور ادمین اشتباه است.")
+        await update.message.reply_text("⛔ رمز عبور مدیریت اشتباه است.")
         return
 
     monitors = get_all_monitors()
     if not monitors:
-        await update.message.reply_text("هیچ پایش فعالی در سیستم ثبت نشده است.")
+        await update.message.reply_text("هیچ پایش فعالی در دیتابیس وجود ندارد.")
         return
 
     if len(args) == 1:
-        msg = "📋 **لیست پایش‌های فعال:**\n\n"
+        msg = "📋 **لیست پایش‌های فعال جهت مدیریت:**\n\n"
         for m in monitors:
-            msg += f"👤 User ID: `{m[0]}` | خطاها: {m[3]}\n"
-        msg += "\nبرای لغو یک پایش مشخص، دستور زیر را بزنید:\n"
-        msg += f"`/admin_cancel_monitors {ADMIN_PASSWORD} <USER_ID>`"
+            msg += f"👤 کاربر: `{m[0]}` | تاریخ‌ها: {m[2]} | خطاها: {m[3]}\n"
+        msg += f"\nبرای لغو یک پایش دستور زیر را وارد کنید:\n`/admin_cancel_monitors {ADMIN_PASSWORD} <USER_ID>`"
         await update.message.reply_text(msg, parse_mode="Markdown")
     else:
-        target_user_id = int(args[1])
-        remove_monitor(target_user_id)
-        await update.message.reply_text(f"✅ پایش کاربر `{target_user_id}` با موفقیت لغو شد.", parse_mode="Markdown")
-        try:
-            await context.bot.send_message(chat_id=target_user_id, text="⚠️ پایش خودکار شما توسط مدیریت سیستم متوقف شد.")
-        except Exception:
-            pass
+        target_user = int(args[1])
+        remove_monitor(target_user)
+        await update.message.reply_text(f"✅ پایش کاربر `{target_user}` لغو گردید.", parse_mode="Markdown")
 
-# ==================== پردازشگر پایش زمان‌بندی‌شده ====================
+# ==================== موتور پایش زمان‌بندی‌شده (JOB QUEUE) ====================
 async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
     monitors = get_all_monitors()
     if not monitors:
         return
 
-    for user_id, chat_id, interval, consecutive_errors, first_error_time in monitors:
-        success, content, error_name = await scrape_naati_dates()
+    for user_id, chat_id, selected_dates_str, consecutive_errors, first_error_time in monitors:
+        success, current_dates, error_msg = await scrape_naati_dates()
         
         if success:
-            update_monitor_error_status(user_id, has_error=False)
-        else:
-            update_monitor_error_status(user_id, has_error=True)
-            logger.warning(f"Error monitoring for user {user_id}: {error_name}")
+            update_error_status(user_id, has_error=False)
+            monitored_list = selected_dates_str.split(",") if selected_dates_str else []
             
+            # بررسی تغییرات و وجود تاریخ‌های جدید
+            new_found = [d for d in current_dates if d not in monitored_list]
+            if new_found:
+                msg = "🔔 **هشدار! تاریخ‌های جدید در آزمون NAATI یافت شد:**\n\n"
+                for d in new_found:
+                    msg += f"{parse_and_format_date(d)}\n"
+                
+                try:
+                    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="Markdown")
+                except Exception as e:
+                    logger.error(f"Failed to send alert to {chat_id}: {e}")
+        else:
+            update_error_status(user_id, has_error=True)
+            logger.warning(f"Error checking NAATI for user {user_id}: {error_msg}")
+            
+            # بررسی قانون ۱ ساعت خطا
             if first_error_time:
                 first_err_dt = datetime.fromisoformat(first_error_time)
                 if datetime.now() - first_err_dt >= timedelta(hours=1):
                     remove_monitor(user_id)
                     cancel_msg = (
-                        f"⚠️ **پایش خودکار متوقف شد!**\n\n"
-                        f"به دلیل بروز خطای مداوم زیر در طول ۱ ساعت گذشته، روند پایش لغو گردید:\n"
-                        f"❌ `کد خطا: {error_name}`\n\n"
+                        f"⚠️ **توقف اتوماتیک پایش!**\n\n"
+                        f"به دلیل بروز خطاهای مداوم در اتصال به سرور طی ۱ ساعت گذشته، پایش شما متوقف گردید.\n"
+                        f"❌ `کد خطا: {error_msg}`\n\n"
                         f"لطفاً مجدداً از طریق دستور /start پایش را فعال کنید."
                     )
                     try:
                         await context.bot.send_message(chat_id=chat_id, text=cancel_msg, parse_mode="Markdown")
                     except Exception as e:
-                        logger.error(f"Failed to send cancellation message to {chat_id}: {e}")
+                        logger.error(f"Failed to send cancellation notice to {chat_id}: {e}")
 
-# ==================== اصلی ====================
+# ==================== شروع اجرای ربات ====================
 def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -263,9 +403,9 @@ def main():
     application.add_handler(CommandHandler("admin_cancel_monitors", admin_cancel_monitors))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    job_queue = application.job_queue
-    if job_queue:
-        job_queue.run_repeating(monitor_job, interval=300, first=10)
+    # افزودن Job پایش ۵ دقیقه‌ای
+    if application.job_queue:
+        application.job_queue.run_repeating(monitor_job, interval=300, first=10)
 
     application.run_polling(drop_pending_updates=True)
 
