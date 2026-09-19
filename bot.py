@@ -4,7 +4,6 @@ import os
 import re
 import sqlite3
 import threading
-import time
 from datetime import datetime, timedelta
 
 from flask import Flask
@@ -25,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== کلیدها و ثابت‌ها ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8708901411:AAHSRpRc-1SfD3o4FkqnWoLYcsSQiOy3Nrk")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8708901411:AAEg1MJrXj4t8zs_KOuYwHMfAW1kZemQTew")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "2377451")
 DB_NAME = "naati_bot.db"
 
@@ -164,13 +163,13 @@ def simplify_error(error_str: str) -> str:
 
 # ==================== اسکرپر با قابلیت نمایش لایو مراحل ====================
 async def scrape_naati_dates(status_update_fn=None):
-    base_text = "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n**لطفاً منتظر باشید.**\n\n"
+    base_text = "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n**لطفاً شکیبا باشید.**\n\n"
     
     steps = [
-        "🌐 ورود و بررسی NAATI",
-        "⏳  بارگذاری منوی زبان",
-        "🔹 اعمال فیلتر زبان (Persian)",
-        "🔍 استخراج و پردازش مقادیر ظرفیت"
+        "ورود به سامانه NAATI",
+        "در حال بارگذاری منوی انتخاب زبان",
+        "اعمال فیلتر زبان فارسی (Persian)",
+        "استخراج و پردازش مقادیر ظرفیت"
     ]
     
     async def update_step(step_index):
@@ -195,11 +194,9 @@ async def scrape_naati_dates(status_update_fn=None):
         page = await context.new_page()
         
         try:
-            # مرحله ۱
             await update_step(0)
             await page.goto("https://cclpanel.com/test-date-checker/", timeout=60000)
             
-            # مرحله ۲
             await update_step(1)
             select_locator = page.locator("#language-test-date")
             await select_locator.wait_for(state="attached", timeout=30000)
@@ -209,12 +206,10 @@ async def scrape_naati_dates(status_update_fn=None):
                     break
                 await asyncio.sleep(1)
                 
-            # مرحله ۳
             await update_step(2)
             await select_locator.select_option(value="Persian", timeout=15000)
             await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=20000)
             
-            # مرحله ۴
             await update_step(3)
             items = await page.query_selector_all(".test-date-item")
             extracted_dates = []
@@ -230,7 +225,6 @@ async def scrape_naati_dates(status_update_fn=None):
                 lines = [line.strip() for line in all_text.split("\n") if line.strip()]
                 extracted_dates = [l for l in lines if "No test dates" not in l]
             
-            # ثبت تیک نهایی برای تمام مراحل
             if status_update_fn:
                 final_progress = base_text + "\n".join([f"✅ {s}" for s in steps])
                 try:
@@ -279,12 +273,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         initial_msg = (
             "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n"
             "**لطفاً شکیبا باشید.**\n\n"
-            "⚪ 🌐 ورود به سامانه NAATI\n"
-            "⚪ ⏳ در حال بارگذاری منوی انتخاب زبان\n"
-            "⚪ 🔹 اعمال فیلتر زبان فارسی (Persian)\n"
-            "⚪ 🔍 استخراج و پردازش مقادیر ظرفیت"
+            "⚪ ورود به سامانه NAATI\n"
+            "⚪ در حال بارگذاری منوی انتخاب زبان\n"
+            "⚪ اعمال فیلتر زبان فارسی (Persian)\n"
+            "⚪ استخراج و پردازش مقادیر ظرفیت"
         )
-        status_msg = await query.edit_message_text(initial_msg, parse_mode="Markdown")
+        await query.edit_message_text(initial_msg, parse_mode="Markdown")
 
         async def update_status_text(new_text):
             await query.message.edit_text(new_text, parse_mode="Markdown")
@@ -333,7 +327,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         extracted = context.user_data.get("extracted_dates", [])
         
         if idx < len(extracted):
-            target_date = extracted[idx]
             selected = context.user_data.get("selected_indices", [])
             
             if idx in selected:
@@ -360,14 +353,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chosen_dates = extracted[:4]
             add_or_update_monitor(user_id, chat_id, chosen_dates)
             await query.edit_message_text(
-                f"✅ **پایش خودکار فعال شد!**\n\nربات هر ۵ دقیقه ظرفیت آزمون‌های زیر را بررسی کرده و در صورت تغییر اطلاع خواهد داد:\n\n" +
+                f"✅ **پایش خودکار با موفقیت فعال شد. ربات هر ۵ دقیقه وضعیت سایت را بررسی می‌کند.**\n\nتاریخ‌های تحت پایش:\n" +
                 "\n".join([parse_and_format_date(d) for d in chosen_dates]),
                 parse_mode="Markdown"
             )
 
     elif query.data == "stop_monitor":
         remove_monitor(user_id)
-        await query.edit_message_text("⛔ **پایش خودکار شما کاملاً غیرفعال گردید.**")
+        await query.edit_message_text("❌ **پایش خودکار شما غیرفعال شد.**")
 
 # ==================== پنل مدیریت ادمین ====================
 async def admin_cancel_monitors(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -392,7 +385,7 @@ async def admin_cancel_monitors(update: Update, context: ContextTypes.DEFAULT_TY
         remove_monitor(target_user)
         await update.message.reply_text(f"✅ پایش کاربر `{target_user}` لغو گردید.", parse_mode="Markdown")
 
-# ==================== موتور پایش زمان‌بندی‌شده (JOB QUEUE) ====================
+# ==================== موتور پایش زمان‌بندی‌شده ====================
 async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
     monitors = get_all_monitors()
     if not monitors:
