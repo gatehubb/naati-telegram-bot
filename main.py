@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import threading
@@ -10,137 +11,154 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# ----------------------------------------------------
-# ۱. راه‌اندازی Web Server ساده برای خنثی کردن Timeout در Render
-# ----------------------------------------------------
+# ------------------------------------------------------------------------------
+# ۱. ساخت سرور سلامت‌سنج (Health Check Server) برای نگه داشتن سرویس در Render
+# ------------------------------------------------------------------------------
 web_app = Flask(__name__)
 
 
 @web_app.route('/')
 def health_check():
-  return 'Bot is running live!', 200
+  return 'OK', 200
 
 
-def run_flask():
-  # Render پورت را به صورت خودکار در متغیر PORT قرار می‌دهد
-  port = int(os.environ.get('PORT', 8080))
-  web_app.run(host='0.0.0.0', port=port)
+def start_health_server():
+  """اجرای وب سرور در یک Thread مجزا جهت پاسخ به Pingهای Render"""
+  port = int(os.environ.get('PORT', 10000))
+  try:
+    web_app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+  except Exception as e:
+    logging.error(f'Failed to start health check server: {e}')
 
 
-# ----------------------------------------------------
-# ۲. تنظیمات تنظیمات لوگ و توکن ربات
-# ----------------------------------------------------
+# ------------------------------------------------------------------------------
+# ۲. پیکربندی سیستم Log
+# ------------------------------------------------------------------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
 )
+logger = logging.getLogger(__name__)
 
-# توکن مستقیم یا دریافت از Environment Variable
 BOT_TOKEN = os.environ.get(
     'BOT_TOKEN', '8708901411:AAHq60CbzFXNhIfhNlP7R0mH4rQ1a2LVS_4'
 )
 
 
-# ----------------------------------------------------
-# ۳. توابع اصلی ربات (Handlers)
-# ----------------------------------------------------
+# ------------------------------------------------------------------------------
+# ۳. توابع ربات تلگرام (Telegram Handlers)
+# ------------------------------------------------------------------------------
 async def start_command(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-  """پاسخ به دستور /start"""
-  keyboard = [[
-      InlineKeyboardButton(
-          '🌐 NAATI استخراج و انتخاب تاریخ از', callback_data='extract_dates'
-      )
-  ]]
-  reply_markup = InlineKeyboardMarkup(keyboard)
+  """مدیریت دستور /start"""
+  try:
+    keyboard = [[
+        InlineKeyboardButton(
+            '🌐 استخراج و انتخاب تاریخ از NAATI', callback_data='extract_dates'
+        )
+    ]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-  welcome_text = (
-      '👋 **به ربات پایش هوشمند آزمون NAATI CCL خوش آمدید!**\n\n'
-      'امکانات ربات:\n'
-      '• دریافت زنده تاریخ‌های فعال آزمون فارسی\n'
-      '• نمایش خودکار تاریخ شمسی و ساعت به وقت ایران (تهران)\n'
-      '• پایش یک تاریخ خاص همراه با اعلام ظرفیت‌های جدید\n'
-      '• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n'
-      '• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال هشدار آنی تغییر ظرفیت\n\n'
-      'جهت شروع، روی دکمه زیر کلیک کنید:'
-  )
-
-  if update.message:
-    await update.message.reply_text(
-        welcome_text, parse_mode='Markdown', reply_markup=reply_markup
+    welcome_text = (
+        '👋 **به ربات پایش هوشمند آزمون NAATI CCL خوش آمدید!**\n\n'
+        'امکانات ربات:\n'
+        '• دریافت زنده تاریخ‌های فعال آزمون فارسی\n'
+        '• نمایش خودکار تاریخ شمسی و ساعت به وقت ایران\n'
+        '• پایش اتوماتیک و ارسال هشدار آنی\n\n'
+        'جهت شروع، روی دکمه زیر کلیک کنید:'
     )
+
+    if update.message:
+      await update.message.reply_text(
+          welcome_text, parse_mode='Markdown', reply_markup=reply_markup
+      )
+  except Exception as e:
+    logger.error(f'Error in start_command: {e}')
 
 
 async def button_click_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-  """مدیریت کلیک روی دکمه‌های شیشه‌ای (Inline Buttons)"""
+  """مدیریت ایمن کلیک روی دکمه‌های شیشه‌ای (Callback Queries)"""
   query = update.callback_query
+  if not query:
+    return
 
-  # پاسخ فوری به تلگرام برای برداشتن حالت Loading روی دکمه
-  await query.answer()
+  try:
+    # پاسخ سریع به تلگرام برای حذف حالت در حال بارگذاری روی دکمه
+    await query.answer()
 
-  if query.data == 'extract_dates':
-    # ارسال پیام وضعیت در حال پردازش
-    await query.edit_message_text(
-        text='⏳ **در حال استخراج و دریافت اطلاعات از سامانه NAATI... لطفاً چند لحظه شکیبا باشید.**',
-        parse_mode='Markdown',
-    )
+    if query.data == 'extract_dates':
+      await query.edit_message_text(
+          text='⏳ **در حال استخراج و دریافت اطلاعات از سامانه NAATI... لطفاً چند لحظه شکیبا باشید.**',
+          parse_mode='Markdown',
+      )
 
-    # TODO: منطق اصلی دریافت تاریخ‌ها را در این قسمت جای‌گذاری کنید.
-    # به عنوان نمونه یک منوی نمونه نمایش داده می‌شود:
-    keyboard = [
-        [
-            InlineKeyboardButton(
-                'چهارشنبه ۱۹ خرداد ۱۴۰۶ - ساعت ۰۵:۳۰',
-                callback_data='date_1',
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                'چهارشنبه ۲ تیر ۱۴۰۶ - ساعت ۰۵:۳۰', callback_data='date_2'
-            )
-        ],
-        [InlineKeyboardButton('🔙 بازگشت به منوی اصلی', callback_data='main_menu')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+      # شبیه‌سازی دریافت داده‌ها یا منوی جدید
+      keyboard = [
+          [
+              InlineKeyboardButton(
+                  'چهارشنبه ۱۹ خرداد ۱۴۰۶ - ساعت ۰۵:۳۰',
+                  callback_data='date_1',
+              )
+          ],
+          [
+              InlineKeyboardButton(
+                  '🔙 بازگشت به منوی اصلی', callback_data='main_menu'
+              )
+          ],
+      ]
+      reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
-        text='👇 لطفاً نحوه پایش را مشخص کنید:', reply_markup=reply_markup
-    )
+      await query.edit_message_text(
+          text='👇 لطفاً تاریخ مورد نظر جهت پایش را انتخاب کنید:',
+          reply_markup=reply_markup,
+      )
 
-  elif query.data == 'main_menu':
-    # بازگشت به منوی اصلی
-    keyboard = [[
-        InlineKeyboardButton(
-            '🌐 NAATI استخراج و انتخاب تاریخ از', callback_data='extract_dates'
-        )
-    ]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        text='جهت شروع، روی دکمه زیر کلیک کنید:', reply_markup=reply_markup
-    )
+    elif query.data == 'main_menu':
+      keyboard = [[
+          InlineKeyboardButton(
+              '🌐 استخراج و انتخاب تاریخ از NAATI',
+              callback_data='extract_dates',
+          )
+      ]]
+      reply_markup = InlineKeyboardMarkup(keyboard)
+      await query.edit_message_text(
+          text='جهت شروع، روی دکمه زیر کلیک کنید:', reply_markup=reply_markup
+      )
+
+  except Exception as e:
+    logger.error(f'Error handling button click ({query.data}): {e}')
 
 
-# ----------------------------------------------------
-# ۴. نقطه اجرای اصلی (Main Execution)
-# ----------------------------------------------------
+async def error_handler(
+    update: object, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+  """مدیریت خطاهای غیرمنتظره ربات"""
+  logger.error(msg='Exception while handling an update:', exc_info=context.error)
+
+
+# ------------------------------------------------------------------------------
+# ۴. نقطه ورود و اجرای برنامه (Main Function)
+# ------------------------------------------------------------------------------
 def main():
-  # ۱. اجرای Web Server در یک Thread جداگانه
-  threading.Thread(target=run_flask, daemon=True).start()
-  logging.info('Flask HTTP server started.')
+  # الف) اجرای وب سرور در Thread مجزا
+  health_thread = threading.Thread(target=start_health_server, daemon=True)
+  health_thread.start()
+  logger.info('Health check HTTP server initialized.')
 
-  # ۲. ساخت و پیکربندی Application ربات
-  app = Application.builder().token(BOT_TOKEN).build()
+  # ب) راه‌اندازی ربات تلگرام
+  application = Application.builder().token(BOT_TOKEN).build()
 
-  # افزودن Handlerها
-  app.add_handler(CommandHandler('start', start_command))
-  app.add_handler(CallbackQueryHandler(button_click_handler))
+  # افزودن ثبت‌کننده‌های رویداد (Handlers)
+  application.add_handler(CommandHandler('start', start_command))
+  application.add_handler(CallbackQueryHandler(button_click_handler))
+  application.add_error_handler(error_handler)
 
-  # ۳. شروع دریافت پیام‌ها (Polling)
-  logging.info('Bot Polling started...')
-  app.run_polling(drop_pending_updates=True)
+  # ج) شروع Polling
+  logger.info('Bot polling starting...')
+  application.run_polling(drop_pending_updates=True)
 
 
 if __name__ == '__main__':
