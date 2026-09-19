@@ -1,112 +1,135 @@
-import html
 from datetime import datetime
-import pytz
 import jdatetime
+import pytz
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
-def convert_sydney_to_tehran_shamsi(raw_date_str: str) -> tuple[str, str]:
-    """
-    دریافت تاریخ میلادی به وقت سیدنی و تبدیل آن به:
-    ۱. خط اول: تاریخ میلادی + (Sydney)
-    ۲. خط دوم: روز هفته + تاریخ شمسی + ساعت به وقت تهران
-    """
-    clean_date_str = raw_date_str.strip()
-    sydney_line = f"{clean_date_str} (Sydney)"
-    
+# ==========================================
+# 1. تابع اختصاصی تبدیل تاریخ سیدنی به تهران
+# ==========================================
+
+
+def convert_sydney_to_tehran(date_str: str) -> str:
+    """تبدیل رشته تاریخ سیدنی به فرمت دو خطی شامل زمان سیدنی و زمان تهران (شمسی)"""
     try:
-        # پارس کردن رشته تاریخ میلادی (مانند: '01-10-2026 10:45 AM')
-        dt_naive = datetime.strptime(clean_date_str, "%d-%m-%Y %I:%M %p")
-        
-        # ۱. مشخص کردن منطقه زمانی سیدنی (با احتساب ساعت تابستانی DST)
+        # 1. Parse کردن تاریخ ورودی میلادی (فرمت: DD-MM-YYYY HH:MM AM/PM)
+        dt_naive = datetime.strptime(date_str.strip(), "%d-%m-%Y %I:%M %p")
+
+        # 2. تنظیم منطقه زمانی سیدنی (با احتساب DST اتوماتیک)
         sydney_tz = pytz.timezone("Australia/Sydney")
-        dt_sydney = sydney_tz.localize(dt_naive)
-        
-        # ۲. تبدیل به منطقه زمانی تهران
+        sydney_dt = sydney_tz.localize(dt_naive)
+
+        # 3. تبدیل به منطقه زمانی تهران
         tehran_tz = pytz.timezone("Asia/Tehran")
-        dt_tehran = dt_sydney.astimezone(tehran_tz)
-        
-        # ۳. تبدیل به تاریخ هجری شمسی
-        shamsi_date = jdatetime.datetime.fromgregorian(datetime=dt_tehran)
-        
-        # ۴. اسامی روزهای هفته
-        weekdays_fa = [
-            "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یکشنبه"
-        ]
-        day_name = weekdays_fa[dt_tehran.weekday()]
-        
-        # ۵. اسامی ماه‌های شمسی
-        months_fa = [
-            "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-            "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
-        ]
-        month_name = months_fa[shamsi_date.month - 1]
-        
-        # ۶. ساخت خط دوم
-        tehran_line = (
-            f"└ 🗓 {day_name} {shamsi_date.day} {month_name} {shamsi_date.year} "
-            f"| ⏰ {dt_tehran.strftime('%H:%M')} (تهران)"
+        tehran_dt = sydney_dt.astimezone(tehran_tz)
+
+        # 4. تبدیل به هجری شمسی
+        j_date = jdatetime.datetime.fromgregorian(datetime=tehran_dt)
+
+        # 5. فرمت‌دهی خروجی برای تلگرام
+        sydney_formatted = f"🇦🇺 {date_str} (سیدنی)"
+        tehran_formatted = (
+            f"🇮🇷 {j_date.strftime('%Y/%m/%d - %H:%M')} (تهران)"
         )
-        return sydney_line, tehran_line
 
-    except Exception:
-        # در صورت بروز خطای غیرمنتظره جهت جلوگیری از کرش ربات
-        return sydney_line, "└ 🗓 خطا در محاسبه تاریخ شمسی"
+        return f"{sydney_formatted}\n   └ {tehran_formatted}"
+    except Exception as e:
+        # در صورت بروز هرگونه خطای غیرمنتظره، اصل متن بازگردانده می‌شود تا ربات کرش نکند
+        return date_str
 
 
-def build_ccl_message(exam_slots: list[dict]) -> str:
-    """
-    تابع اصلی برای دریافت لیست آزمون‌ها و ساخت پیام نهایی تلگرام.
-    
-    ورودی نمونه:
-    [
-        {"location": "ONLINE - Online", "date": "01-10-2026 10:45 AM", "seats": 34},
-        ...
+# ==========================================
+# 2. داده‌های نمونه (نمایش ساختار لیست آزمون‌ها)
+# ==========================================
+
+EXAMS_DATA = [
+    {"status": "ONLINE - Online", "date": "01-10-2026 10:45 AM", "seats": 34},
+    {"status": "ONLINE - Online", "date": "20-10-2026 12:00 PM", "seats": 36},
+    {"status": "ONLINE - Online", "date": "05-11-2026 12:00 PM", "seats": 49},
+    {"status": "ONLINE - Online", "date": "02-12-2026 12:00 PM", "seats": 52},
+    {"status": "ONLINE - Online", "date": "10-12-2026 10:45 AM", "seats": 60},
+    {"status": "ONLINE - Online", "date": "19-01-2027 12:00 PM", "seats": 57},
+    {"status": "ONLINE - Online", "date": "16-02-2027 12:00 PM", "seats": 56},
+    {"status": "ONLINE - Online", "date": "04-03-2027 10:45 AM", "seats": 40},
+    {"status": "ONLINE - Online", "date": "16-03-2027 12:00 PM", "seats": 59},
+    {"status": "ONLINE - Online", "date": "20-04-2027 12:00 PM", "seats": 60},
+    {"status": "ONLINE - Online", "date": "12-05-2027 12:00 PM", "seats": 60},
+    {"status": "ONLINE - Online", "date": "09-06-2027 12:00 PM", "seats": 59},
+    {"status": "ONLINE - Online", "date": "23-06-2027 12:00 PM", "seats": 54},
+]
+
+
+# ==========================================
+# 3. تابع اصلی ساخت و ارسال پیام
+# ==========================================
+
+
+async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ربات پیام خروجی را به همراه تاریخ‌های تبدیل‌شده تولید و ارسال می‌کند."""
+    message_lines = ["🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n"]
+
+    for idx, item in enumerate(EXAMS_DATA, start=1):
+        formatted_date = convert_sydney_to_tehran(item["date"])
+        line = (
+            f"{idx}. 📍 **{item['status']}** | 📅 {formatted_date} | 💺 **{item['seats']}**\n"
+        )
+        message_lines.append(line)
+
+    message_lines.append("\n👇 **لطفاً نحوه پایش را مشخص کنید:**")
+
+    full_message_text = "\n".join(message_lines)
+
+    # ساخت دکمه‌های شیشه‌ای دقیقا مطابق عکس
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🎯 انتخاب تکی", callback_data="select_single"
+            ),
+            InlineKeyboardButton(
+                "📌 انتخاب چندتایی (حداکثر ۴)", callback_data="select_multi"
+            ),
+        ],
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="main_menu")],
     ]
-    """
-    lines = ["📋 <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n"]
-    
-    for idx, slot in enumerate(exam_slots, start=1):
-        location = html.escape(str(slot.get("location", "ONLINE - Online")))
-        raw_date = str(slot.get("date", "") or slot.get("date_str", ""))
-        seats = html.escape(str(slot.get("seats", "0")))
-        
-        # دریافت دو خط تاریخ
-        sydney_date, tehran_date = convert_sydney_to_tehran_shamsi(raw_date)
-        
-        # ساخت هر ردیف
-        item_text = (
-            f"{idx}. 📍 {location} | 📅 {html.escape(sydney_date)} | 💺 {seats}\n"
-            f"   {tehran_date}\n"
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.message:
+        await update.message.reply_text(
+            full_message_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
         )
-        lines.append(item_text)
-        
-    lines.append("👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>")
-    
-    return "\n".join(lines)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(
+            full_message_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown",
+        )
 
 
-# =============================================================
-# نمونه اجرا و تست مستقیم (Mock Data مطابق اسکرین‌شات شما)
-# =============================================================
+# ==========================================
+# 4. اجرای ربات (Main execution)
+# ==========================================
+
+
+def main():
+    # توکن ربات خود را در این قسمت قرار دهید
+    BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # دستور /start برای شروع و نمایش تاریخ‌ها
+    app.add_handler(CommandHandler("start", show_ccl_dates))
+    app.add_handler(CommandHandler("dates", show_ccl_dates))
+
+    print("Bot is running...")
+    app.run_polling()
+
+
 if __name__ == "__main__":
-    # داده‌های واقعی شما از روی عکس:
-    raw_slots = [
-        {"location": "ONLINE - Online", "date": "01-10-2026 10:45 AM", "seats": 34},
-        {"location": "ONLINE - Online", "date": "20-10-2026 12:00 PM", "seats": 36},
-        {"location": "ONLINE - Online", "date": "05-11-2026 12:00 PM", "seats": 49},
-        {"location": "ONLINE - Online", "date": "02-12-2026 12:00 PM", "seats": 52},
-        {"location": "ONLINE - Online", "date": "10-12-2026 10:45 AM", "seats": 60},
-        {"location": "ONLINE - Online", "date": "19-01-2027 12:00 PM", "seats": 57},
-        {"location": "ONLINE - Online", "date": "16-02-2027 12:00 PM", "seats": 56},
-        {"location": "ONLINE - Online", "date": "04-03-2027 10:45 AM", "seats": 40},
-        {"location": "ONLINE - Online", "date": "16-03-2027 12:00 PM", "seats": 59},
-        {"location": "ONLINE - Online", "date": "20-04-2027 12:00 PM", "seats": 60},
-        {"location": "ONLINE - Online", "date": "12-05-2027 12:00 PM", "seats": 60},
-        {"location": "ONLINE - Online", "date": "09-06-2027 12:00 PM", "seats": 59},
-        {"location": "ONLINE - Online", "date": "23-06-2027 12:00 PM", "seats": 54},
-    ]
-
-    # ساخت پیام final
-    telegram_message = build_ccl_message(raw_slots)
-    
-    # خروجی نهایی متنی
-    print(telegram_message)
+    main()
