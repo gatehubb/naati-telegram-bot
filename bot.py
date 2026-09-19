@@ -3,48 +3,44 @@ from datetime import datetime
 import pytz
 import jdatetime
 
-
 def convert_sydney_to_tehran_shamsi(raw_date_str: str) -> tuple[str, str]:
     """
-    دریافت تاریخ میلادی بر اساس منطقه زمانی سیدنی 
-    و تبدیل آن به تاریخ شمسی و ساعت تهران.
-    
-    ورودی نمونه: '01-10-2026 10:45 AM'
-    خروجی:
-        خط ۱: '01-10-2026 10:45 AM (Sydney)'
-        خط ۲: '└ 🗓 پنج‌شنبه ۹ مهر ۱۴۰۵ | ⏰ ۱۴:۱۵ (تهران)'
+    دریافت تاریخ میلادی به وقت سیدنی و تبدیل آن به:
+    ۱. خط اول: تاریخ میلادی + (Sydney)
+    ۲. خط دوم: روز هفته + تاریخ شمسی + ساعت به وقت تهران
     """
-    sydney_line = f"{raw_date_str} (Sydney)"
+    clean_date_str = raw_date_str.strip()
+    sydney_line = f"{clean_date_str} (Sydney)"
     
     try:
-        # ۱. پارس کردن رشته تاریخ میلادی
-        dt_naive = datetime.strptime(raw_date_str.strip(), "%d-%m-%Y %I:%M %p")
+        # پارس کردن رشته تاریخ میلادی (مانند: '01-10-2026 10:45 AM')
+        dt_naive = datetime.strptime(clean_date_str, "%d-%m-%Y %I:%M %p")
         
-        # ۲. اعمال منطقه زمانی سیدنی (با احتساب ساعت تابستانی DST)
+        # ۱. مشخص کردن منطقه زمانی سیدنی (با احتساب ساعت تابستانی DST)
         sydney_tz = pytz.timezone("Australia/Sydney")
         dt_sydney = sydney_tz.localize(dt_naive)
         
-        # ۳. تبدیل به منطقه زمانی تهران
+        # ۲. تبدیل به منطقه زمانی تهران
         tehran_tz = pytz.timezone("Asia/Tehran")
         dt_tehran = dt_sydney.astimezone(tehran_tz)
         
-        # ۴. تبدیل به تاریخ هجری شمسی
+        # ۳. تبدیل به تاریخ هجری شمسی
         shamsi_date = jdatetime.datetime.fromgregorian(datetime=dt_tehran)
         
-        # ۵. اسامی روزهای هفته به فارسی
+        # ۴. اسامی روزهای هفته
         weekdays_fa = [
             "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنج‌شنبه", "جمعه", "شنبه", "یکشنبه"
         ]
         day_name = weekdays_fa[dt_tehran.weekday()]
         
-        # ۶. اسامی ماه‌های شمسی
+        # ۵. اسامی ماه‌های شمسی
         months_fa = [
             "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
             "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
         ]
         month_name = months_fa[shamsi_date.month - 1]
         
-        # ۷. ساخت خط دوم (تهران و شمسی)
+        # ۶. ساخت خط دوم
         tehran_line = (
             f"└ 🗓 {day_name} {shamsi_date.day} {month_name} {shamsi_date.year} "
             f"| ⏰ {dt_tehran.strftime('%H:%M')} (تهران)"
@@ -52,50 +48,65 @@ def convert_sydney_to_tehran_shamsi(raw_date_str: str) -> tuple[str, str]:
         return sydney_line, tehran_line
 
     except Exception:
-        # در صورت بروز خطا در پارس یا فرمت ناهمخوان، از کرش برنامه جلوگیری می‌شود
+        # در صورت بروز خطای غیرمنتظره جهت جلوگیری از کرش ربات
         return sydney_line, "└ 🗓 خطا در محاسبه تاریخ شمسی"
 
 
-def generate_ccl_telegram_message(exam_slots: list[dict]) -> str:
+def build_ccl_message(exam_slots: list[dict]) -> str:
     """
-    تولید پیام نهایی و شکیل برای تلگرام
+    تابع اصلی برای دریافت لیست آزمون‌ها و ساخت پیام نهایی تلگرام.
+    
+    ورودی نمونه:
+    [
+        {"location": "ONLINE - Online", "date": "01-10-2026 10:45 AM", "seats": 34},
+        ...
+    ]
     """
-    message_lines = ["📅 <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n"]
+    lines = ["📋 <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n"]
     
     for idx, slot in enumerate(exam_slots, start=1):
         location = html.escape(str(slot.get("location", "ONLINE - Online")))
-        raw_date = str(slot.get("date", ""))
+        raw_date = str(slot.get("date", "") or slot.get("date_str", ""))
         seats = html.escape(str(slot.get("seats", "0")))
         
-        # تبدیل تاریخ‌ها
+        # دریافت دو خط تاریخ
         sydney_date, tehran_date = convert_sydney_to_tehran_shamsi(raw_date)
         
-        # ساخت بخش مربوط به هر آزمون
-        line_item = (
+        # ساخت هر ردیف
+        item_text = (
             f"{idx}. 📍 {location} | 📅 {html.escape(sydney_date)} | 💺 {seats}\n"
             f"   {tehran_date}\n"
         )
-        message_lines.append(line_item)
+        lines.append(item_text)
         
-    message_lines.append("👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>")
+    lines.append("👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>")
     
-    return "\n".join(message_lines)
+    return "\n".join(lines)
 
 
 # =============================================================
-# نمونه اجرا و تست متد (امتحان مستقیم کد)
+# نمونه اجرا و تست مستقیم (Mock Data مطابق اسکرین‌شات شما)
 # =============================================================
 if __name__ == "__main__":
-    # داده‌های نمونه مطابق تصویر شما
-    sample_slots = [
+    # داده‌های واقعی شما از روی عکس:
+    raw_slots = [
         {"location": "ONLINE - Online", "date": "01-10-2026 10:45 AM", "seats": 34},
         {"location": "ONLINE - Online", "date": "20-10-2026 12:00 PM", "seats": 36},
         {"location": "ONLINE - Online", "date": "05-11-2026 12:00 PM", "seats": 49},
         {"location": "ONLINE - Online", "date": "02-12-2026 12:00 PM", "seats": 52},
+        {"location": "ONLINE - Online", "date": "10-12-2026 10:45 AM", "seats": 60},
+        {"location": "ONLINE - Online", "date": "19-01-2027 12:00 PM", "seats": 57},
+        {"location": "ONLINE - Online", "date": "16-02-2027 12:00 PM", "seats": 56},
+        {"location": "ONLINE - Online", "date": "04-03-2027 10:45 AM", "seats": 40},
+        {"location": "ONLINE - Online", "date": "16-03-2027 12:00 PM", "seats": 59},
+        {"location": "ONLINE - Online", "date": "20-04-2027 12:00 PM", "seats": 60},
+        {"location": "ONLINE - Online", "date": "12-05-2027 12:00 PM", "seats": 60},
+        {"location": "ONLINE - Online", "date": "09-06-2027 12:00 PM", "seats": 59},
+        {"location": "ONLINE - Online", "date": "23-06-2027 12:00 PM", "seats": 54},
     ]
 
-    # تولید پیام تلگرام
-    final_message = generate_ccl_telegram_message(sample_slots)
+    # ساخت پیام final
+    telegram_message = build_ccl_message(raw_slots)
     
-    # چاپ خروجی جهت بررسی
-    print(final_message)
+    # خروجی نهایی متنی
+    print(telegram_message)
