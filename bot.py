@@ -369,7 +369,7 @@ class StatusTracker:
 
     async def update(self, step_text, status="in_progress", error_msg=None):
         if status == "in_progress":
-            self.steps.append(f"⏳ {step_text}...")
+            self.steps.append(f"⏳ {step_text}")
         elif status == "success":
             if self.steps:
                 self.steps[-1] = f"✅ {step_text}"
@@ -397,7 +397,7 @@ class StatusTracker:
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
-            await tracker.update("راه‌اندازی مرورگر اختصاصی", "in_progress")
+            await tracker.update("شروع مرورگر", "in_progress")
         browser = None
         context = None
         try:
@@ -413,16 +413,16 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             context = await browser.new_context()
             page = await context.new_page()
             if tracker:
-                await tracker.update("راه‌اندازی مرورگر اختصاصی", "success")
-                await tracker.update("باز کردن سایت NAATI", "in_progress")
+                await tracker.update("شروع مرورگر", "success")
+                await tracker.update("اتصال به NAATI", "in_progress")
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="networkidle",
                 timeout=45000,
             )
             if tracker:
-                await tracker.update("باز کردن سایت NAATI", "success")
-                await tracker.update("انتخاب نوع آزمون (CCL Test)", "in_progress")
+                await tracker.update("اتصال به NAATI", "success")
+                await tracker.update("فیلتر آزمون CCL", "in_progress")
             selects = page.locator("select")
             await selects.nth(0).wait_for(timeout=10000)
             await selects.nth(0).select_option(
@@ -430,13 +430,13 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             )
             await page.wait_for_timeout(1000)
             if tracker:
-                await tracker.update("انتخاب نوع آزمون (CCL Test)", "success")
-                await tracker.update("اعمال فیلتر زبان (Persian)", "in_progress")
+                await tracker.update("فیلتر آزمون CCL", "success")
+                await tracker.update("فیلتر زبان Persian", "in_progress")
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
-                await tracker.update("اعمال فیلتر زبان (Persian)", "success")
-                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "in_progress")
+                await tracker.update("فیلتر زبان Persian", "success")
+                await tracker.update("استخراج جدول", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
             all_dates = []
@@ -456,7 +456,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                         "seats": seats,
                     })
             if tracker:
-                await tracker.update("استخراج و تحلیل جدول ظرفیت‌ها", "success")
+                await tracker.update("استخراج جدول", "success")
             return all_dates, None
         except Exception as e:
             error_details = str(e)
@@ -500,12 +500,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
     
-    # تنظیم ریپلای کیبورد اصلی
+    # تنظیم ریپلای کیبورد پایین صفحه
     await update.message.reply_text(
-        text="👇",
+        text="خوش آمدید!",
         reply_markup=get_persistent_reply_keyboard(),
     )
-    # ارسال مستقیم پیام خوش‌آمدگویی و دکمه شیشه‌ای بدون پیام جداگانه منوی کاربری
+    # ارسال مستقیم پیام خوش‌آمدگویی بدون پیام جداگانه ایموجی
     main_kb = await get_main_inline_keyboard(chat_id)
     await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=main_kb)
 
@@ -613,7 +613,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         status_msg = await context.bot.send_message(
             chat_id,
-            "🔄 <b>در حال تلاش مجدد برای بارگذاری درخواست پایش شما...</b>",
+            "🔄 <b>در حال تلاش مجدد برای بارگذاری...</b>",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
@@ -646,7 +646,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_msg_id = query.message.message_id
         status_msg = await context.bot.send_message(
             chat_id,
-            "🔄 <b>در حال دریافت اطلاعات از سایت NAATI...</b>",
+            "⚙️ <b>وضعیت پردازش:</b>\n\n⏳ شروع مرورگر",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
