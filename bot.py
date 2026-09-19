@@ -34,7 +34,7 @@ logging.basicConfig(
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # ==================== تنظیمات متغیرهای محیطی ====================
-TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
+TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN", "8708901411:AAHq60CbzFXNhIfhNlP7R0mH4rQ1a2LVS_4").strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 
 DB_PATH = "monitors.db"
@@ -216,7 +216,7 @@ def _get_all_monitors_sync():
 
 
 async def get_all_monitors():
-    return await asyncio-to-thread(_get_all_monitors_sync)
+    return await asyncio.to_thread(_get_all_monitors_sync)
 
 
 # ==================== امنیت ادمین ====================
@@ -490,23 +490,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     USER_TEMP_SELECTIONS.pop(chat_id, None)
     
     welcome_text = (
-        "<b>🤖 دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
+        "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
         "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
-        "<b>📌 امکانات ربات:</b>\n"
-        "• 🔍 دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-        "• 🎯 پایش تکی یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
-        "• 📌 پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
-        "• ⚡ پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
-        "جهت شروع، روی دکمه <b>استخراج و انتخاب تاریخ</b> کلیک کنید:"
+        "📌 <b>امکانات ربات:</b>\n"
+        "🔍 • دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
+        "🎯 • پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "📌 • پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
+        "⚡ • پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+        "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
     
+    # تنظیم ریپلای کیبورد اصلی
     await update.message.reply_text(
-        welcome_text,
-        parse_mode="HTML",
+        text="👇",
         reply_markup=get_persistent_reply_keyboard(),
     )
+    # ارسال مستقیم پیام خوش‌آمدگویی و دکمه شیشه‌ای بدون پیام جداگانه منوی کاربری
     main_kb = await get_main_inline_keyboard(chat_id)
-    await update.message.reply_text("👇 <b>منوی کاربری:</b>", parse_mode="HTML", reply_markup=main_kb)
+    await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=main_kb)
 
 
 async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -514,13 +515,8 @@ async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
     if text in ["🔙 برگشت به منوی اصلی", "↩️ برگشت به صفحه قبل", " برگشت به منوی اصلی", " برگشت به صفحه قبل"]:
-        await update.message.reply_text(
-            "🏠 <b>منوی اصلی:</b>",
-            parse_mode="HTML",
-            reply_markup=get_persistent_reply_keyboard()
-        )
         main_kb = await get_main_inline_keyboard(chat_id)
-        await update.message.reply_text("لطفاً گزینه مورد نظر را انتخاب کنید:", reply_markup=main_kb)
+        await update.message.reply_text("🏠 <b>منوی اصلی:</b>", parse_mode="HTML", reply_markup=main_kb)
 
 
 async def show_status(chat_id):
