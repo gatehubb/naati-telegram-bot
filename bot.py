@@ -38,13 +38,12 @@ def convert_sydney_to_tehran(date_str: str) -> str:
         )
 
         return f"{sydney_formatted}\n   └ {tehran_formatted}"
-    except Exception as e:
-        # در صورت بروز هرگونه خطای غیرمنتظره، اصل متن بازگردانده می‌شود تا ربات کرش نکند
+    except Exception:
         return date_str
 
 
 # ==========================================
-# 2. داده‌های نمونه (نمایش ساختار لیست آزمون‌ها)
+# 2. داده‌های آزمون‌ها
 # ==========================================
 
 EXAMS_DATA = [
@@ -65,12 +64,11 @@ EXAMS_DATA = [
 
 
 # ==========================================
-# 3. تابع اصلی ساخت و ارسال پیام
+# 3. تابع اصلی ارسال پیام
 # ==========================================
 
 
 async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """ربات پیام خروجی را به همراه تاریخ‌های تبدیل‌شده تولید و ارسال می‌کند."""
     message_lines = ["🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n"]
 
     for idx, item in enumerate(EXAMS_DATA, start=1):
@@ -84,7 +82,6 @@ async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     full_message_text = "\n".join(message_lines)
 
-    # ساخت دکمه‌های شیشه‌ای دقیقا مطابق عکس
     keyboard = [
         [
             InlineKeyboardButton(
@@ -113,21 +110,20 @@ async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ==========================================
-# 4. اجرای ربات (Main execution)
+# 4. اجرای ربات
 # ==========================================
 
 
 def main():
-    # توکن ربات خود را در این قسمت قرار دهید
-    BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+    # توکن اختصاصی شما
+    BOT_TOKEN = "8708901411:AAHq60CbzFXNhIfhNlP7R0mH4rQ1a2LVS_4"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # دستور /start برای شروع و نمایش تاریخ‌ها
     app.add_handler(CommandHandler("start", show_ccl_dates))
     app.add_handler(CommandHandler("dates", show_ccl_dates))
 
-    print("Bot is running...")
+    print("ربات با موفقیت روشن شد...")
     app.run_polling()
 
 
