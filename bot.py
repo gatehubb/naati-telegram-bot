@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import subprocess
 import threading
 from datetime import datetime, timedelta
 
@@ -161,6 +162,13 @@ def simplify_error(error_str: str) -> str:
         first_line = error_str.split("\n")[0]
         return f"ERR_UNKNOWN ({first_line[:50]}...)"
 
+# ==================== بررسی و نصب خودکار کرومیوم ====================
+def ensure_chromium_installed():
+    try:
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        logger.error(f"Failed to auto-install chromium: {e}")
+
 # ==================== اسکرپر با قابلیت نمایش لایو مراحل ====================
 async def scrape_naati_dates(status_update_fn=None):
     base_text = "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n**لطفاً شکیبا باشید.**\n\n"
@@ -188,18 +196,33 @@ async def scrape_naati_dates(status_update_fn=None):
         except Exception as e:
             logger.error(f"Status update error: {e}")
 
+    # اطمینان از وجود داشتن مرورگر
+    ensure_chromium_installed()
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+        try:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            )
+        except Exception as launch_err:
+            logger.error(f"Browser launch failed, attempting reinstall: {launch_err}")
+            ensure_chromium_installed()
+            browser = await p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+            )
+
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = await context.new_page()
         
         try:
             await update_step(0)
-            await page.goto("https://cclpanel.com/test-date-checker/", timeout=45000, wait_until="domcontentloaded")
+            await page.goto("https://cclpanel.com/test-date-checker/", timeout=40000, wait_until="domcontentloaded")
             
             await update_step(1)
             select_locator = page.locator("#language-test-date")
-            await select_locator.wait_for(state="attached", timeout=20000)
+            await select_locator.wait_for(state="attached", timeout=15000)
             
             for _ in range(10):
                 if not await select_locator.is_disabled():
@@ -207,7 +230,7 @@ async def scrape_naati_dates(status_update_fn=None):
                 await asyncio.sleep(1)
                 
             await update_step(2)
-            await select_locator.select_option(value="Persian", timeout=15000)
+            await select_locator.select_option(value="Persian", timeout=10000)
             await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=15000)
             
             await update_step(3)
