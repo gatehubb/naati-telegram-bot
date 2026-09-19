@@ -391,7 +391,11 @@ class StatusTracker:
                 safe_err = html.escape(str(error_msg)[:200])
                 self.steps.append(f"\n⚠️ علت خطا:\n{safe_err}")
 
-        full_text = "⚙️ <b>وضعیت پردازش:</b>\n\n" + "\n".join(self.steps)
+        full_text = (
+            "⚙️ <b>وضعیت پردازش:</b>\n"
+            "<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n"
+            + "\n".join(self.steps)
+        )
         try:
             await self.message.edit_text(full_text, parse_mode="HTML")
         except Exception as e:
@@ -622,7 +626,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         status_msg = await context.bot.send_message(
             chat_id,
-            "🔄 <b>در حال تلاش مجدد برای بارگذاری...</b>",
+            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع مرورگر",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
@@ -655,7 +659,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_msg_id = query.message.message_id
         status_msg = await context.bot.send_message(
             chat_id,
-            "⚙️ <b>وضعیت پردازش:</b>\n\n⏳ شروع مرورگر",
+            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع مرورگر",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
