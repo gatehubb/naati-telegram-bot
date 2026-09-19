@@ -152,9 +152,9 @@ def update_error_status(user_id, has_error):
 
 def simplify_error(error_str: str) -> str:
     if "language-test-date" in error_str or "select_option" in error_str:
-        return "ERR_TIMEOUT_LANG_DISABLED (کندی در منوی انتخاب زبان)"
+        return "ERR_TIMEOUT_LANG_DISABLED (عدم پاسخگویی منوی انتخاب زبان)"
     elif "Timeout" in error_str:
-        return "ERR_SITE_TIMEOUT (عدم پاسخگویی سرور NAATI)"
+        return "ERR_SITE_TIMEOUT (کندی در پاسخگویی سرور NAATI)"
     elif "net::ERR_" in error_str:
         return "ERR_NETWORK_DISCONNECTED (خطای اتصال شبکه)"
     else:
@@ -189,26 +189,26 @@ async def scrape_naati_dates(status_update_fn=None):
             logger.error(f"Status update error: {e}")
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        browser = await p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'])
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         page = await context.new_page()
         
         try:
             await update_step(0)
-            await page.goto("https://cclpanel.com/test-date-checker/", timeout=60000)
+            await page.goto("https://cclpanel.com/test-date-checker/", timeout=45000, wait_until="domcontentloaded")
             
             await update_step(1)
             select_locator = page.locator("#language-test-date")
-            await select_locator.wait_for(state="attached", timeout=30000)
+            await select_locator.wait_for(state="attached", timeout=20000)
             
-            for _ in range(15):
+            for _ in range(10):
                 if not await select_locator.is_disabled():
                     break
                 await asyncio.sleep(1)
                 
             await update_step(2)
             await select_locator.select_option(value="Persian", timeout=15000)
-            await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=20000)
+            await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=15000)
             
             await update_step(3)
             items = await page.query_selector_all(".test-date-item")
@@ -281,13 +281,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(initial_msg, parse_mode="Markdown")
 
         async def update_status_text(new_text):
-            await query.message.edit_text(new_text, parse_mode="Markdown")
+            try:
+                await query.edit_message_text(new_text, parse_mode="Markdown")
+            except Exception:
+                pass
 
         success, dates, error_msg = await scrape_naati_dates(status_update_fn=update_status_text)
         
         if not success:
             keyboard = [[InlineKeyboardButton("🔄 تلاش مجدد", callback_data="fetch_dates")]]
-            await query.message.reply_text(
+            await query.edit_message_text(
                 f"❌ **خطا در دریافت اطلاعات:**\n`{error_msg}`\n\nلطفاً چند لحظه بعد مجدداً تلاش کنید.",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
@@ -296,7 +299,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if not dates:
             keyboard = [[InlineKeyboardButton("🔄 بروزرسانی مجدد", callback_data="fetch_dates")]]
-            await query.message.reply_text(
+            await query.edit_message_text(
                 "⚠️ **در حال حاضر هیچ تاریخ آزمون فعالی برای زبان فارسی ثبت نشده است.**",
                 reply_markup=InlineKeyboardMarkup(keyboard),
                 parse_mode="Markdown"
@@ -316,7 +319,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("🚀 پایش همه تاریخ‌ها", callback_data="monitor_all")])
         keyboard.append([InlineKeyboardButton("❌ لغو پایش‌های فعال", callback_data="stop_monitor")])
 
-        await query.message.reply_text(
+        await query.edit_message_text(
             msg + "\n👇 جهت انتخاب تاریخ برای پایش خودکار، دکمه مورد نظر را لمس کنید:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
