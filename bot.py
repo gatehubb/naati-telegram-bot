@@ -136,11 +136,10 @@ def simplify_error_message(error_str: str) -> str:
     elif "net::ERR_" in error_str:
         return "ERR_NETWORK_CONNECTION (اختلال در اتصال شبکه به سایت NAATI)"
     else:
-        # استخراج خط اول خطا برای خلاصه‌سازی
         first_line = error_str.split("\n")[0]
         return f"ERR_UNKNOWN ({first_line[:80]}...)"
 
-# ==================== وب اسکپینگ (Playwright) ====================
+# ==================== وب اسکرپینگ (Playwright) ====================
 async def scrape_naati_dates():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -150,11 +149,9 @@ async def scrape_naati_dates():
         try:
             await page.goto("https://cclpanel.com/test-date-checker/", timeout=60000)
             
-            # انتظار برای آماده و فعال شدن عنصر Select (حل مشکل Timeout disabled)
             select_locator = page.locator("#language-test-date")
             await select_locator.wait_for(state="attached", timeout=30000)
             
-            # انتظار هوشمند برای فعال شدن المان (خارج شدن از حالت disabled)
             for _ in range(15):
                 is_disabled = await select_locator.is_disabled()
                 if not is_disabled:
@@ -162,8 +159,6 @@ async def scrape_naati_dates():
                 await asyncio.sleep(1)
                 
             await select_locator.select_option(value="Persian", timeout=15000)
-            
-            # انتظار برای دریافت نتایج
             await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=20000)
             
             content = await page.content()
@@ -178,8 +173,8 @@ async def scrape_naati_dates():
 # ==================== دستورات تلگرام ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🔍 استخراج و پایش تاریخ‌های جدید", callback_query_data="start_monitor")],
-        [InlineKeyboardButton("⛔ لغو پایش فعال", callback_query_data="stop_monitor")]
+        [InlineKeyboardButton("🔍 استخراج و پایش تاریخ‌های جدید", callback_data="start_monitor")],
+        [InlineKeyboardButton("⛔ لغو پایش فعال", callback_data="stop_monitor")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
@@ -202,7 +197,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== پنل مدیریت ادمین ====================
 async def admin_cancel_monitors(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت و لغو پایش‌ها از طریق پنل ادمین"""
     user_id = update.effective_user.id
     args = context.args
     
@@ -242,16 +236,13 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
         
         if success:
             update_monitor_error_status(user_id, has_error=False)
-            # در صورت یافتن تاریخ جدید می‌توانید اطلاع‌رسانی کنید
         else:
             update_monitor_error_status(user_id, has_error=True)
             logger.warning(f"Error monitoring for user {user_id}: {error_name}")
             
-            # بررسی شرط ۱ ساعت خطای متوالی
             if first_error_time:
                 first_err_dt = datetime.fromisoformat(first_error_time)
                 if datetime.now() - first_err_dt >= timedelta(hours=1):
-                    # لغو خودکار پایش به دلیل خطای متوالی مداوم
                     remove_monitor(user_id)
                     cancel_msg = (
                         f"⚠️ **پایش خودکار متوقف شد!**\n\n"
@@ -272,7 +263,6 @@ def main():
     application.add_handler(CommandHandler("admin_cancel_monitors", admin_cancel_monitors))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # افزودن جاب تکرار شونده هر ۵ دقیقه یک‌بار
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(monitor_job, interval=300, first=10)
