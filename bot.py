@@ -1,5 +1,4 @@
 import asyncio
-import html
 import logging
 import os
 import re
@@ -16,8 +15,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
-    MessageHandler,
-    filters,
 )
 
 # ==================== تنظیمات LOGGING ====================
@@ -72,11 +69,7 @@ def gregorian_to_jalali(gy, gm, gd):
     return jy, jm, jd
 
 def parse_and_format_date(date_str):
-    """
-    تبدیل تاریخ متنی مانند '15 October 2026' به شمسی و روزهای باقیمانده
-    """
     try:
-        # پاکسازی متن
         clean_str = re.sub(r'[^\w\s]', '', date_str).strip()
         dt = datetime.strptime(clean_str, "%d %B %Y")
         jy, jm, jd = gregorian_to_jalali(dt.year, dt.month, dt.day)
@@ -91,7 +84,7 @@ def parse_and_format_date(date_str):
     except Exception:
         return f"📅 {date_str}"
 
-# ==================== مدیریت پایگاه داده (SQLITE) ====================
+# ==================== مدیریت پایگاه داده ====================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -158,7 +151,6 @@ def update_error_status(user_id, has_error):
     conn.commit()
     conn.close()
 
-# ==================== خلاصه‌سازی خطاهای شبکه ====================
 def simplify_error(error_str: str) -> str:
     if "language-test-date" in error_str or "select_option" in error_str:
         return "ERR_TIMEOUT_LANG_DISABLED (کندی در منوی انتخاب زبان)"
@@ -170,16 +162,45 @@ def simplify_error(error_str: str) -> str:
         first_line = error_str.split("\n")[0]
         return f"ERR_UNKNOWN ({first_line[:50]}...)"
 
-# ==================== وب اسکرپر PLAYWRIGHT ====================
-async def scrape_naati_dates():
+# ==================== اسکرپر با قابلیت نمایش لایو مراحل ====================
+async def scrape_naati_dates(status_update_fn=None):
+    base_text = "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n**لطفاً منتظر باشید.**\n\n"
+    
+    steps = [
+        "🌐 ورود و بررسی NAATI",
+        "⏳  بارگذاری منوی زبان",
+        "🔹 اعمال فیلتر زبان (Persian)",
+        "🔍 استخراج و پردازش مقادیر ظرفیت"
+    ]
+    
+    async def update_step(step_index):
+        if not status_update_fn:
+            return
+        progress_text = base_text
+        for idx, step_name in enumerate(steps):
+            if idx < step_index:
+                progress_text += f"✅ {step_name}\n"
+            elif idx == step_index:
+                progress_text += f"⏳ {step_name}...\n"
+            else:
+                progress_text += f"⚪ {step_name}\n"
+        try:
+            await status_update_fn(progress_text)
+        except Exception as e:
+            logger.error(f"Status update error: {e}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
         page = await context.new_page()
         
         try:
+            # مرحله ۱
+            await update_step(0)
             await page.goto("https://cclpanel.com/test-date-checker/", timeout=60000)
             
+            # مرحله ۲
+            await update_step(1)
             select_locator = page.locator("#language-test-date")
             await select_locator.wait_for(state="attached", timeout=30000)
             
@@ -188,10 +209,13 @@ async def scrape_naati_dates():
                     break
                 await asyncio.sleep(1)
                 
+            # مرحله ۳
+            await update_step(2)
             await select_locator.select_option(value="Persian", timeout=15000)
             await page.wait_for_selector(".test-date-item, .no-dates-message, #results-container", timeout=20000)
             
-            # استخراج المان‌های تاریخ
+            # مرحله ۴
+            await update_step(3)
             items = await page.query_selector_all(".test-date-item")
             extracted_dates = []
             
@@ -202,10 +226,17 @@ async def scrape_naati_dates():
                     if txt_clean:
                         extracted_dates.append(txt_clean)
             else:
-                # بررسی محتوای متنی کلی در صورت عدم وجود کلاس اختصاصی
                 all_text = await page.inner_text("#results-container")
                 lines = [line.strip() for line in all_text.split("\n") if line.strip()]
                 extracted_dates = [l for l in lines if "No test dates" not in l]
+            
+            # ثبت تیک نهایی برای تمام مراحل
+            if status_update_fn:
+                final_progress = base_text + "\n".join([f"✅ {s}" for s in steps])
+                try:
+                    await status_update_fn(final_progress)
+                except Exception:
+                    pass
             
             await browser.close()
             return True, extracted_dates, None
@@ -245,9 +276,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
 
     if query.data == "fetch_dates":
-        await query.edit_message_text("⏳ در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال... لطفاً شکیبا باشید.")
-        
-        success, dates, error_msg = await scrape_naati_dates()
+        initial_msg = (
+            "⏳ **در حال اتصال به سایت NAATI و استخراج آخرین تاریخ‌های فعال...**\n"
+            "**لطفاً شکیبا باشید.**\n\n"
+            "⚪ 🌐 ورود به سامانه NAATI\n"
+            "⚪ ⏳ در حال بارگذاری منوی انتخاب زبان\n"
+            "⚪ 🔹 اعمال فیلتر زبان فارسی (Persian)\n"
+            "⚪ 🔍 استخراج و پردازش مقادیر ظرفیت"
+        )
+        status_msg = await query.edit_message_text(initial_msg, parse_mode="Markdown")
+
+        async def update_status_text(new_text):
+            await query.message.edit_text(new_text, parse_mode="Markdown")
+
+        success, dates, error_msg = await scrape_naati_dates(status_update_fn=update_status_text)
         
         if not success:
             keyboard = [[InlineKeyboardButton("🔄 تلاش مجدد", callback_data="fetch_dates")]]
@@ -267,7 +309,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # ذخیره تاریخ‌های استخراج شده در context کاربر
         context.user_data["extracted_dates"] = dates
         context.user_data["selected_indices"] = []
 
@@ -316,7 +357,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data == "monitor_all":
         extracted = context.user_data.get("extracted_dates", [])
         if extracted:
-            chosen_dates = extracted[:4] # حداکثر ۴ تاریخ
+            chosen_dates = extracted[:4]
             add_or_update_monitor(user_id, chat_id, chosen_dates)
             await query.edit_message_text(
                 f"✅ **پایش خودکار فعال شد!**\n\nربات هر ۵ دقیقه ظرفیت آزمون‌های زیر را بررسی کرده و در صورت تغییر اطلاع خواهد داد:\n\n" +
@@ -364,7 +405,6 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
             update_error_status(user_id, has_error=False)
             monitored_list = selected_dates_str.split(",") if selected_dates_str else []
             
-            # بررسی تغییرات و وجود تاریخ‌های جدید
             new_found = [d for d in current_dates if d not in monitored_list]
             if new_found:
                 msg = "🔔 **هشدار! تاریخ‌های جدید در آزمون NAATI یافت شد:**\n\n"
@@ -379,7 +419,6 @@ async def monitor_job(context: ContextTypes.DEFAULT_TYPE):
             update_error_status(user_id, has_error=True)
             logger.warning(f"Error checking NAATI for user {user_id}: {error_msg}")
             
-            # بررسی قانون ۱ ساعت خطا
             if first_error_time:
                 first_err_dt = datetime.fromisoformat(first_error_time)
                 if datetime.now() - first_err_dt >= timedelta(hours=1):
@@ -403,7 +442,6 @@ def main():
     application.add_handler(CommandHandler("admin_cancel_monitors", admin_cancel_monitors))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    # افزودن Job پایش ۵ دقیقه‌ای
     if application.job_queue:
         application.job_queue.run_repeating(monitor_job, interval=300, first=10)
 
