@@ -10,36 +10,29 @@ from telegram.ext import (
 )
 
 # ==========================================
-# 1. تابع اختصاصی تبدیل تاریخ سیدنی به تهران
+# 1. تابع اختصاصی تبدیل تاریخ (سیدنی به تهران)
 # ==========================================
 
 
-def convert_sydney_to_tehran(date_str: str) -> str:
-    """تبدیل رشته تاریخ سیدنی به فرمت دو خطی شامل زمان سیدنی و زمان تهران (شمسی)"""
+def convert_sydney_to_tehran(date_str: str) -> tuple[str, str]:
+    """تبدیل تاریخ سیدنی به فرمت دو خطی بدون تداخل فونت و چیدمان"""
     try:
-        # 1. Parse کردن تاریخ ورودی میلادی (فرمت: DD-MM-YYYY HH:MM AM/PM)
         dt_naive = datetime.strptime(date_str.strip(), "%d-%m-%Y %I:%M %p")
 
-        # 2. تنظیم منطقه زمانی سیدنی (با احتساب DST اتوماتیک)
         sydney_tz = pytz.timezone("Australia/Sydney")
         sydney_dt = sydney_tz.localize(dt_naive)
 
-        # 3. تبدیل به منطقه زمانی تهران
         tehran_tz = pytz.timezone("Asia/Tehran")
         tehran_dt = sydney_dt.astimezone(tehran_tz)
 
-        # 4. تبدیل به هجری شمسی
         j_date = jdatetime.datetime.fromgregorian(datetime=tehran_dt)
 
-        # 5. فرمت‌دهی خروجی برای تلگرام
-        sydney_formatted = f"🇦🇺 {date_str} (سیدنی)"
-        tehran_formatted = (
-            f"🇮🇷 {j_date.strftime('%Y/%m/%d - %H:%M')} (تهران)"
-        )
+        sydney_line = f"{date_str} (Sydney)"
+        tehran_line = f"تهران: {j_date.strftime('%Y/%m/%d - %H:%M')}"
 
-        return f"{sydney_formatted}\n   └ {tehran_formatted}"
+        return sydney_line, tehran_line
     except Exception:
-        return date_str
+        return date_str, ""
 
 
 # ==========================================
@@ -64,23 +57,56 @@ EXAMS_DATA = [
 
 
 # ==========================================
-# 3. تابع اصلی ارسال پیام
+# 3. منوی اولیه ربات (با دستور /start)
+# ==========================================
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش منوی اصلی اولیه هنگام زدن /start"""
+    welcome_text = "سلام! به ربات بررسی آزمون‌های NAATI CCL خوش آمدید.\n\nلطفاً گزینه مورد نظر خود را انتخاب کنید:"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "📅 مشاهده تاریخ‌های فعال آزمون",
+                callback_data="show_ccl_dates",
+            )
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.message:
+        await update.message.reply_text(
+            welcome_text, reply_markup=reply_markup
+        )
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(
+            welcome_text, reply_markup=reply_markup
+        )
+
+
+# ==========================================
+# 4. نمایش جدول تاریخ‌ها (پس از انتخاب کاربر)
 # ==========================================
 
 
 async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_lines = ["🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n"]
+    query = update.callback_query
+    if query:
+        await query.answer()
+
+    message_text = "🗓 **تاریخ‌های فعال آزمون CCL فارسی در سایت:**\n\n"
 
     for idx, item in enumerate(EXAMS_DATA, start=1):
-        formatted_date = convert_sydney_to_tehran(item["date"])
-        line = (
-            f"{idx}. 📍 **{item['status']}** | 📅 {formatted_date} | 💺 **{item['seats']}**\n"
-        )
-        message_lines.append(line)
+        sydney_str, tehran_str = convert_sydney_to_tehran(item["date"])
 
-    message_lines.append("\n👇 **لطفاً نحوه پایش را مشخص کنید:**")
+        message_text += f"{idx}. 📍 {item['status']} | 💺 {item['seats']}\n"
+        message_text += f"   📅 🇦🇺 {sydney_str}\n"
+        if tehran_str:
+            message_text += f"   🇮🇷 {tehran_str}\n"
+        message_text += "\n"
 
-    full_message_text = "\n".join(message_lines)
+    message_text += "👇 **لطفاً نحوه پایش را مشخص کنید:**"
 
     keyboard = [
         [
@@ -95,35 +121,43 @@ async def show_ccl_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    if update.message:
+    if query:
+        await query.edit_message_text(
+            message_text, reply_markup=reply_markup, parse_mode="Markdown"
+        )
+    elif update.message:
         await update.message.reply_text(
-            full_message_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            full_message_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
+            message_text, reply_markup=reply_markup, parse_mode="Markdown"
         )
 
 
 # ==========================================
-# 4. اجرای ربات
+# 5. مدیریت Callbackها و اجرای ربات
 # ==========================================
+
+
+async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    if data == "show_ccl_dates":
+        await show_ccl_dates(update, context)
+    elif data == "main_menu":
+        await start_command(update, context)
 
 
 def main():
-    # توکن اختصاصی شما
     BOT_TOKEN = "8708901411:AAHq60CbzFXNhIfhNlP7R0mH4rQ1a2LVS_4"
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", show_ccl_dates))
-    app.add_handler(CommandHandler("dates", show_ccl_dates))
+    # ۱. دستور استارت فقط منوی اصلی را باز می‌کند
+    app.add_handler(CommandHandler("start", start_command))
 
-    print("ربات با موفقیت روشن شد...")
+    # ۲. مدیریت کلیک روی دکمه‌ها
+    app.add_handler(CallbackQueryHandler(handle_callbacks))
+
+    print("ربات فعال شد...")
     app.run_polling()
 
 
