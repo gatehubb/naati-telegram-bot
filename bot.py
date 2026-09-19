@@ -40,8 +40,19 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 DB_PATH = "monitors.db"
 USER_TEMP_SELECTIONS = {}
 
+# متن استاندارد منوی اصلی
+MAIN_MENU_TEXT = (
+    "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
+    "<b>امکانات ربات:</b>\n"
+    "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
+    "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+    "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
+    "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+    "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
+)
 
-# ==================== نصب اتوماتیک مرورگر در صورت نیاز ====================
+
+# ==================== نصب اتوماتیک مرورگر ====================
 def ensure_playwright_browsers():
     try:
         subprocess.run(
@@ -489,25 +500,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
     
-    welcome_text = (
+    start_welcome_text = (
         "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
         "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
-        "📌 <b>امکانات ربات:</b>\n"
-        "🔍 • دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-        "🎯 • پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
-        "📌 • پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
-        "⚡ • پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+        "<b>امکانات ربات:</b>\n"
+        "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
+        "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
+        "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
     
-    # تنظیم ریپلای کیبورد پایین صفحه
     await update.message.reply_text(
         text="خوش آمدید!",
         reply_markup=get_persistent_reply_keyboard(),
     )
-    # ارسال مستقیم پیام خوش‌آمدگویی بدون پیام جداگانه ایموجی
     main_kb = await get_main_inline_keyboard(chat_id)
-    await update.message.reply_text(welcome_text, parse_mode="HTML", reply_markup=main_kb)
+    await update.message.reply_text(start_welcome_text, parse_mode="HTML", reply_markup=main_kb)
 
 
 async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -516,7 +525,7 @@ async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE
     USER_TEMP_SELECTIONS.pop(chat_id, None)
     if text in ["🔙 برگشت به منوی اصلی", "↩️ برگشت به صفحه قبل", " برگشت به منوی اصلی", " برگشت به صفحه قبل"]:
         main_kb = await get_main_inline_keyboard(chat_id)
-        await update.message.reply_text("🏠 <b>منوی اصلی:</b>", parse_mode="HTML", reply_markup=main_kb)
+        await update.message.reply_text(MAIN_MENU_TEXT, parse_mode="HTML", reply_markup=main_kb)
 
 
 async def show_status(chat_id):
@@ -572,7 +581,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_delete_message(context, chat_id, query.message.message_id)
         main_kb = await get_main_inline_keyboard(chat_id)
         await context.bot.send_message(
-            chat_id, "🏠 <b>منوی اصلی:</b>", parse_mode="HTML", reply_markup=main_kb
+            chat_id, MAIN_MENU_TEXT, parse_mode="HTML", reply_markup=main_kb
         )
         return
 
@@ -594,7 +603,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         main_kb = await get_main_inline_keyboard(chat_id)
         await context.bot.send_message(
             chat_id,
-            "✅ <b>پایش شما با موفقیت متوقف شد.</b>",
+            "✅ <b>پایش شما با موفقیت متوقف شد.</b>\n\n" + MAIN_MENU_TEXT,
             parse_mode="HTML",
             reply_markup=main_kb,
         )
@@ -662,7 +671,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await context.bot.send_message(
                 chat_id,
-                f"❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n⚠️ علت خطا:\n{safe_err}",
+                f"❌ <b>خطا در بربرقراری ارتباط با سایت NAATI!</b>\n\n⚠️ علت خطا:\n{safe_err}",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard(),
             )
@@ -1035,7 +1044,6 @@ async def global_monitoring_loop(app):
                                 f"💺 <b>ظرفیت جدید:</b> {html.escape(curr_seats)}",
                             )
 
-                    # بررسی باز شدن تاریخ جدید نزدیک
                     cached_dates = monitor_info.get("cached_snapshot", [])
                     new_dates_found = [
                         item["date"]
@@ -1078,7 +1086,6 @@ async def global_monitoring_loop(app):
                             updated_seats_list.append(
                                 f"{s_date}:{match_item['seats']}"
                             )
-                            # چک تغییر ظرفیت
                             old_seat = ""
                             for seat_pair in monitor_info["last_seats"].split(
                                 " | "
@@ -1120,7 +1127,6 @@ async def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # تعریف ConversationHandler برای پنل ادمین
     admin_handler = ConversationHandler(
         entry_points=[CommandHandler("admin", admin_command)],
         states={
@@ -1143,7 +1149,6 @@ async def main():
     )
     app.add_handler(CallbackQueryHandler(button_click))
 
-    # اجرای حلقه پایش پس از استارت ربات
     asyncio.create_task(global_monitoring_loop(app))
 
     logging.info("Bot is running...")
@@ -1151,7 +1156,6 @@ async def main():
     await app.start()
     await app.updater.start_polling()
 
-    # زنده نگه داشتن برنامه
     await asyncio.Event().wait()
 
 
