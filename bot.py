@@ -216,7 +216,7 @@ def _get_all_monitors_sync():
 
 
 async def get_all_monitors():
-    return await asyncio.to_thread(_get_all_monitors_sync)
+    return await asyncio-to-thread(_get_all_monitors_sync)
 
 
 # ==================== امنیت ادمین ====================
@@ -292,8 +292,8 @@ threading.Thread(target=run_flask_server, daemon=True).start()
 # ==================== کیبوردهای ربات ====================
 def get_persistent_reply_keyboard():
     keyboard = [[
-        KeyboardButton(" برگشت به منوی اصلی"),
-        KeyboardButton(" برگشت به صفحه قبل"),
+        KeyboardButton("🔙 برگشت به منوی اصلی"),
+        KeyboardButton("↩️ برگشت به صفحه قبل"),
     ]]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -303,16 +303,16 @@ async def get_main_inline_keyboard(chat_id=None):
     if chat_id and await get_monitor(chat_id):
         keyboard.append([
             InlineKeyboardButton(
-                " مشاهده وضعیت پایش فعال", callback_data="btn_status"
+                "📊 مشاهده وضعیت پایش فعال", callback_data="btn_status"
             )
         ])
         keyboard.append(
-            [InlineKeyboardButton(" لغو پایش فعلی", callback_data="btn_stop_monitor")]
+            [InlineKeyboardButton("⛔ لغو پایش فعلی", callback_data="btn_stop_monitor")]
         )
 
     keyboard.append([
         InlineKeyboardButton(
-            " انتخاب تاریخ از سایت NAATI", callback_data="btn_list"
+            "🔍 استخراج و انتخاب تاریخ از NAATI", callback_data="btn_list"
         )
     ])
     return InlineKeyboardMarkup(keyboard)
@@ -320,8 +320,8 @@ async def get_main_inline_keyboard(chat_id=None):
 
 def get_single_main_menu_keyboard():
     keyboard = [
-        [InlineKeyboardButton(" وضعیت پایش من", callback_data="btn_status")],
-        [InlineKeyboardButton(" منوی اصلی", callback_data="btn_main")],
+        [InlineKeyboardButton("📊 وضعیت پایش من", callback_data="btn_status")],
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -329,12 +329,12 @@ def get_single_main_menu_keyboard():
 def get_mode_selection_keyboard():
     keyboard = [
         [
-            InlineKeyboardButton(" انتخاب تکی", callback_data="mode_single"),
+            InlineKeyboardButton("🎯 انتخاب تکی", callback_data="mode_single"),
             InlineKeyboardButton(
-                " انتخاب چندتایی (حداکثر ۴)", callback_data="mode_multi"
+                "📌 انتخاب چندتایی (حداکثر ۴)", callback_data="mode_multi"
             ),
         ],
-        [InlineKeyboardButton(" منوی اصلی", callback_data="btn_main")],
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -343,12 +343,12 @@ def get_error_retry_keyboard():
     keyboard = [
         [
             InlineKeyboardButton(
-                " تلاش مجدد بارگذاری درخواست",
+                "🔄 تلاش مجدد بارگذاری درخواست",
                 callback_data="btn_retry_monitor",
             )
         ],
-        [InlineKeyboardButton(" انتخاب تاریخ جدید", callback_data="btn_list")],
-        [InlineKeyboardButton(" منوی اصلی", callback_data="btn_main")],
+        [InlineKeyboardButton("🔍 انتخاب تاریخ جدید", callback_data="btn_list")],
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")],
     ]
     return InlineKeyboardMarkup(keyboard)
 
@@ -369,18 +369,18 @@ class StatusTracker:
 
     async def update(self, step_text, status="in_progress", error_msg=None):
         if status == "in_progress":
-            self.steps.append(f" {step_text}...")
+            self.steps.append(f"⏳ {step_text}...")
         elif status == "success":
             if self.steps:
-                self.steps[-1] = f" {step_text}"
+                self.steps[-1] = f"✅ {step_text}"
         elif status == "failed":
             if self.steps:
-                self.steps[-1] = f" {step_text}"
+                self.steps[-1] = f"❌ {step_text}"
             if error_msg:
                 safe_err = html.escape(str(error_msg)[:200])
-                self.steps.append(f"\n علت خطا:\n{safe_err}")
+                self.steps.append(f"\n⚠️ علت خطا:\n{safe_err}")
 
-        full_text = " وضعیت پردازش:\n\n" + "\n".join(self.steps)
+        full_text = "⚙️ <b>وضعیت پردازش:</b>\n\n" + "\n".join(self.steps)
         try:
             await self.message.edit_text(full_text, parse_mode="HTML")
         except Exception as e:
@@ -463,7 +463,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             logging.error(f"Error fetching data: {error_details}")
             if tracker:
                 last_step_text = (
-                    tracker.steps[-1].replace(" ", "").replace("...", "")
+                    tracker.steps[-1].replace("⏳ ", "").replace("...", "")
                     if tracker.steps
                     else "پردازش"
                 )
@@ -488,38 +488,54 @@ def is_match(user_input, site_text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
+    
+    welcome_text = (
+        "<b>🤖 دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
+        "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
+        "<b>📌 امکانات ربات:</b>\n"
+        "• 🔍 دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
+        "• 🎯 پایش تکی یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "• 📌 پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
+        "• ⚡ پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+        "جهت شروع، روی دکمه <b>استخراج و انتخاب تاریخ</b> کلیک کنید:"
+    )
+    
     await update.message.reply_text(
-        "سلام! به ربات پایش ظرفیت NAATI خوش آمدید.\n\nلطفاً یک گزینه را انتخاب کنید:",
+        welcome_text,
+        parse_mode="HTML",
         reply_markup=get_persistent_reply_keyboard(),
     )
     main_kb = await get_main_inline_keyboard(chat_id)
-    await update.message.reply_text("منوی کاربری:", reply_markup=main_kb)
+    await update.message.reply_text("👇 <b>منوی کاربری:</b>", parse_mode="HTML", reply_markup=main_kb)
 
 
 async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
-    if text in [" برگشت به منوی اصلی", " برگشت به صفحه قبل"]:
+    if text in ["🔙 برگشت به منوی اصلی", "↩️ برگشت به صفحه قبل", " برگشت به منوی اصلی", " برگشت به صفحه قبل"]:
         await update.message.reply_text(
-            "منوی اصلی:", reply_markup=get_persistent_reply_keyboard()
+            "🏠 <b>منوی اصلی:</b>",
+            parse_mode="HTML",
+            reply_markup=get_persistent_reply_keyboard()
         )
         main_kb = await get_main_inline_keyboard(chat_id)
-        await update.message.reply_text("انتخاب کنید:", reply_markup=main_kb)
+        await update.message.reply_text("لطفاً گزینه مورد نظر را انتخاب کنید:", reply_markup=main_kb)
 
 
 async def show_status(chat_id):
     monitor_info = await get_monitor(chat_id)
     if not monitor_info:
-        return " شما در حال حاضر هیچ پایش فعالی ندارید."
+        return "ℹ️ شما در حال حاضر هیچ پایش فعالی ندارید."
     mode = monitor_info.get("mode")
     if mode == "single":
         d = html.escape(str(monitor_info["target_date"]))
         s = html.escape(str(monitor_info["last_seats"]))
         return (
-            f" پایش تکی فعال است:\n\n تاریخ: {d}\n آخرین"
-            f" ظرفیت ثبت‌شده: {s}\n شرط: اعلام تغییر ظرفیت + باز شدن"
-            " تاریخ جدید در محدوده ±4 سطر"
+            f"🎯 <b>پایش تکی فعال است:</b>\n\n"
+            f"📅 <b>تاریخ:</b> {d}\n"
+            f"💺 <b>آخرین ظرفیت ثبت‌شده:</b> {s}\n\n"
+            f"🔔 <b>شرط هشدار:</b> تغییر ظرفیت این تاریخ یا باز شدن تاریخ‌های جدید در سایت."
         )
     elif mode == "multi":
         dates_list = [
@@ -527,9 +543,9 @@ async def show_status(chat_id):
         ]
         seats_info = html.escape(str(monitor_info["last_seats"]))
         return (
-            " پایش چندتایی فعال است:\n\n تاریخ‌های تحت"
-            f" پایش:\n{', '.join(dates_list)}\n آخرین وضعیت"
-            f" ظرفیت‌ها:\n{seats_info}"
+            f"📌 <b>پایش چندتایی فعال است:</b>\n\n"
+            f"📅 <b>تاریخ‌های تحت پایش:</b>\n{', '.join(dates_list)}\n\n"
+            f"💺 <b>آخرین وضعیت ظرفیت‌ها:</b>\n{seats_info}"
         )
 
 
@@ -560,7 +576,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_delete_message(context, chat_id, query.message.message_id)
         main_kb = await get_main_inline_keyboard(chat_id)
         await context.bot.send_message(
-            chat_id, "منوی اصلی:", reply_markup=main_kb
+            chat_id, "🏠 <b>منوی اصلی:</b>", parse_mode="HTML", reply_markup=main_kb
         )
         return
 
@@ -582,7 +598,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         main_kb = await get_main_inline_keyboard(chat_id)
         await context.bot.send_message(
             chat_id,
-            " پایش شما با موفقیت متوقف شد.",
+            "✅ <b>پایش شما با موفقیت متوقف شد.</b>",
             parse_mode="HTML",
             reply_markup=main_kb,
         )
@@ -595,13 +611,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             main_kb = await get_main_inline_keyboard(chat_id)
             await context.bot.send_message(
                 chat_id,
-                " هیچ درخواست پایش قبلی یافت نشد. لطفاً تاریخ جدید انتخاب کنید.",
+                "⚠️ هیچ درخواست پایش قبلی یافت نشد. لطفاً تاریخ جدید انتخاب کنید.",
                 reply_markup=main_kb,
             )
             return
         status_msg = await context.bot.send_message(
             chat_id,
-            " در حال تلاش مجدد برای بارگذاری درخواست پایش شما...",
+            "🔄 <b>در حال تلاش مجدد برای بارگذاری درخواست پایش شما...</b>",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
@@ -616,7 +632,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await context.bot.send_message(
                 chat_id,
-                f" تلاش مجدد ناموفق بود!\n\n علت خطا:\n{safe_err}",
+                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ علت خطا:\n{safe_err}",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard(),
             )
@@ -624,7 +640,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update_error_status(chat_id, 0)
             await context.bot.send_message(
                 chat_id,
-                " اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.",
+                "✅ <b>اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.</b>",
                 parse_mode="HTML",
                 reply_markup=get_single_main_menu_keyboard(),
             )
@@ -634,7 +650,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_msg_id = query.message.message_id
         status_msg = await context.bot.send_message(
             chat_id,
-            " در حال دریافت اطلاعات از سایت NAATI...",
+            "🔄 <b>در حال دریافت اطلاعات از سایت NAATI...</b>",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
@@ -650,21 +666,21 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await context.bot.send_message(
                 chat_id,
-                f" خطا در برقراری ارتباط با سایت NAATI!\n\n علت خطا:\n{safe_err}",
+                f"❌ <b>خطا در برقراری ارتباط با سایت NAATI!</b>\n\n⚠️ علت خطا:\n{safe_err}",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard(),
             )
             return
 
         context.user_data["cached_dates"] = data
-        msg = " تاریخ‌های فعال آزمون CCL فارسی در سایت:\n\n"
+        msg = "🗓️ <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n\n"
         for idx, item in enumerate(data, 1):
             msg += (
-                f"{idx}. {html.escape(item['location'])} | "
-                f" {html.escape(item['date'])} | "
-                f" {html.escape(item['seats'])}\n"
+                f"{idx}. 📍 {html.escape(item['location'])} | "
+                f"📅 {html.escape(item['date'])} | "
+                f"💺 {html.escape(item['seats'])}\n"
             )
-        msg += "\n لطفاً نحوه پایش را مشخص کنید:"
+        msg += "\n👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>"
         await context.bot.send_message(
             chat_id,
             msg,
@@ -679,7 +695,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not data:
             await context.bot.send_message(
                 chat_id,
-                "اطلاعات منقضی شده، لطفاً دوباره دریافت لیست را بزنید.",
+                "⚠️ اطلاعات منقضی شده، لطفاً دوباره دریافت لیست را بزنید.",
                 reply_markup=get_single_main_menu_keyboard(),
             )
             return
@@ -687,16 +703,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for idx, item in enumerate(data[:10]):
             keyboard.append([
                 InlineKeyboardButton(
-                    f" {item['date']} ({item['seats']})",
+                    f"📅 {item['date']} (💺 {item['seats']})",
                     callback_data=f"select_single_{idx}",
                 )
             ])
         keyboard.append(
-            [InlineKeyboardButton(" منوی اصلی", callback_data="btn_main")]
+            [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")]
         )
         await context.bot.send_message(
             chat_id,
-            " یک تاریخ را جهت پایش تکی انتخاب کنید:",
+            "🎯 <b>یک تاریخ را جهت پایش تکی انتخاب کنید:</b>",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(keyboard),
         )
@@ -723,7 +739,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s_safe = html.escape(selected_item["seats"])
         await context.bot.send_message(
             chat_id,
-            f" پایش تکی فعال شد!\n\n تاریخ انتخابی: {d_safe}\n ظرفیت فعلی: {s_safe}\n\n در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.",
+            f"✅ <b>پایش تکی فعال شد!</b>\n\n📅 <b>تاریخ انتخابی:</b> {d_safe}\n💺 <b>ظرفیت فعلی:</b> {s_safe}\n\n🔔 در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.",
             parse_mode="HTML",
             reply_markup=get_single_main_menu_keyboard(),
         )
@@ -743,7 +759,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             if len(selections) >= 4:
                 await query.answer(
-                    " حداکثر می‌توانید ۴ تاریخ را انتخاب کنید!", show_alert=True
+                    "⚠️ حداکثر می‌توانید ۴ تاریخ را انتخاب کنید!", show_alert=True
                 )
                 return
             selections.add(idx)
@@ -756,7 +772,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = context.user_data.get("cached_dates", [])
         if not selections:
             await query.answer(
-                " لطفاً حداقل یک تاریخ را انتخاب کنید!", show_alert=True
+                "⚠️ لطفاً حداقل یک تاریخ را انتخاب کنید!", show_alert=True
             )
             return
         await safe_delete_message(context, chat_id, query.message.message_id)
@@ -773,10 +789,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_seats=last_seats,
             error_notified=0,
         )
-        dates_str = "\n".join([f"• {html.escape(d)}" for d in selected_dates])
+        dates_str = "\n".join([f"• 📅 {html.escape(d)}" for d in selected_dates])
         await context.bot.send_message(
             chat_id,
-            f" پایش چندتایی فعال شد!\n\n{dates_str}",
+            f"✅ <b>پایش چندتایی فعال شد!</b>\n\n{dates_str}",
             parse_mode="HTML",
             reply_markup=get_single_main_menu_keyboard(),
         )
@@ -793,22 +809,22 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
     selections = USER_TEMP_SELECTIONS.get(chat_id, set())
     keyboard = []
     for idx, item in enumerate(data[:10]):
-        check = " " if idx in selections else "[ ] "
+        check = "✅ " if idx in selections else "⬜ "
         keyboard.append([
             InlineKeyboardButton(
-                f"{check}{item['date']} ({item['seats']})",
+                f"{check}{item['date']} (💺 {item['seats']})",
                 callback_data=f"toggle_multi_{idx}",
             )
         ])
     keyboard.append([
         InlineKeyboardButton(
-            f" ثبت نهایی ({len(selections)}/4)", callback_data="submit_multi"
+            f"📥 ثبت نهایی انتخاب‌ها ({len(selections)}/4)", callback_data="submit_multi"
         )
     ])
     keyboard.append(
-        [InlineKeyboardButton(" منوی اصلی", callback_data="btn_main")]
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")]
     )
-    text = " تاریخ‌های مدنظر را انتخاب کنید (حداکثر ۴ مورد):"
+    text = "📌 <b>تاریخ‌های مدنظر را انتخاب کنید (حداکثر ۴ مورد):</b>"
     if edit:
         try:
             await query.message.edit_text(
@@ -836,12 +852,12 @@ async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             int((status["lockout_until"] - time.time()) / 60) + 1
         )
         await update.message.reply_text(
-            f"️ دسترسی مسدود است!\nبه دلیل ۳ بار ورود اشتباه، تا {remaining_minutes} دقیقه دیگر امکان ورود ندارید.",
+            f"⚠️ <b>دسترسی مسدود است!</b>\nبه دلیل ۳ بار ورود اشتباه، تا {remaining_minutes} دقیقه دیگر امکان ورود ندارید.",
             parse_mode="HTML",
         )
         return ConversationHandler.END
     await update.message.reply_text(
-        " لطفاً رمز عبور مدیریت را وارد کنید:", parse_mode="HTML"
+        "🔑 <b>لطفاً رمز عبور مدیریت را وارد کنید:</b>", parse_mode="HTML"
     )
     return ADMIN_LOGIN_STATE
 
@@ -857,7 +873,7 @@ async def handle_admin_password(
             int((status["lockout_until"] - time.time()) / 60) + 1
         )
         await update.message.reply_text(
-            f"️ دسترسی مسدود است!\nتا {remaining_minutes} دقیقه دیگر منتظر بمانید.",
+            f"⚠️ <b>دسترسی مسدود است!</b>\nتا {remaining_minutes} دقیقه دیگر منتظر بمانید.",
             parse_mode="HTML",
         )
         return ConversationHandler.END
@@ -865,7 +881,7 @@ async def handle_admin_password(
     if entered_pass == ADMIN_PASSWORD:
         await reset_admin_attempts(chat_id)
         await update.message.reply_text(
-            " ورود موفقیت‌آمیز بود.", parse_mode="HTML"
+            "✅ <b>ورود موفقیت‌آمیز بود.</b>", parse_mode="HTML"
         )
         await send_admin_panel_details(context, chat_id)
         return ConversationHandler.END
@@ -875,12 +891,12 @@ async def handle_admin_password(
         attempts_left = 3 - new_status["attempts"]
         if new_status["attempts"] >= 3:
             await update.message.reply_text(
-                " رمز اشتباه است!\n️ ۳ بار اشتباه وارد کردید. به مدت ۳۰ دقیقه مسدود شدید.",
+                "❌ <b>رمز اشتباه است!</b>\n⚠️ ۳ بار اشتباه وارد کردید. به مدت ۳۰ دقیقه مسدود شدید.",
                 parse_mode="HTML",
             )
         else:
             await update.message.reply_text(
-                f" رمز اشتباه است!\nفرصت‌های باقی‌مانده: {attempts_left}",
+                f"❌ <b>رمز اشتباه است!</b>\nفرصت‌های باقی‌مانده: {attempts_left}",
                 parse_mode="HTML",
             )
         return ConversationHandler.END
@@ -892,11 +908,11 @@ async def send_admin_panel_details(
     try:
         monitors = await get_all_monitors()
         total_users = len(monitors)
-        msg = " پنل مدیریت ربات پایش NAATI\n\n"
-        msg += f" تعداد کل پایش‌های فعال: {total_users}\n"
+        msg = "⚙️ <b>پنل مدیریت ربات پایش NAATI</b>\n\n"
+        msg += f"📊 <b>تعداد کل پایش‌های فعال:</b> {total_users}\n"
         msg += "━━━━━━━━━━━━━━━━━━━\n\n"
         if not monitors:
-            msg += " هیچ پایش فعالی وجود ندارد."
+            msg += "ℹ️ هیچ پایش فعالی وجود ندارد."
         else:
             for cid, info in monitors.items():
                 raw_uname = info.get("username") or "Unknown"
@@ -905,25 +921,25 @@ async def send_admin_panel_details(
                     if info.get("username")
                     else f"ID: {cid}"
                 )
-                mode_str = " تکی" if info["mode"] == "single" else " چندتایی"
+                mode_str = "🎯 تکی" if info["mode"] == "single" else "📌 چندتایی"
                 if info["mode"] == "single":
                     t_date = html.escape(str(info["target_date"]))
                     l_seats = html.escape(str(info["last_seats"]))
-                    details = f"تاریخ: {t_date} | آخرین ظرفیت: {l_seats}"
+                    details = f"تاریخ: {t_date} | ظرفیت: {l_seats}"
                 else:
                     sel_dates = [
                         html.escape(d) for d in info["selected_dates"]
                     ]
                     details = f"تاریخ‌ها: {', '.join(sel_dates)}"
-                msg += f" کاربر: {user_str}\nنوع: {mode_str}\nجزئیات: {details}\n\n"
+                msg += f"👤 <b>کاربر:</b> {user_str}\n🔹 <b>نوع:</b> {mode_str}\n📝 <b>جزئیات:</b> {details}\n\n"
 
         keyboard = [
             [
                 InlineKeyboardButton(
-                    " بروزرسانی پنل", callback_data="admin_refresh"
+                    "🔄 بروزرسانی پنل", callback_data="admin_refresh"
                 )
             ],
-            [InlineKeyboardButton(" خروج", callback_data="btn_main")],
+            [InlineKeyboardButton("🚪 خروج", callback_data="btn_main")],
         ]
         if message_to_edit:
             await message_to_edit.edit_text(
@@ -942,7 +958,7 @@ async def send_admin_panel_details(
         logging.error(f"Error in send_admin_panel_details: {e}")
         await context.bot.send_message(
             chat_id=chat_id,
-            text=f" خطا در نمایش پنل ادمین:\n{html.escape(str(e))}",
+            text=f"❌ خطا در نمایش پنل ادمین:\n{html.escape(str(e))}",
             parse_mode="HTML",
         )
 
@@ -972,9 +988,9 @@ async def global_monitoring_loop(app):
                             await app.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
-                                    " خطا در پایش درخواست شما!\n\nدر میانه"
+                                    "⚠️ <b>خطا در پایش درخواست شما!</b>\n\nدر میانه"
                                     " زمان پایش، ربات نتوانست وارد سایت شود یا"
-                                    f" داده‌ها را بررسی کند.\n\n علت خطا:\n{safe_err}"
+                                    f" داده‌ها را بررسی کند.\n\n❌ علت خطا:\n{safe_err}"
                                 ),
                                 parse_mode="HTML",
                                 reply_markup=get_error_retry_keyboard(),
@@ -1018,9 +1034,9 @@ async def global_monitoring_loop(app):
                             await send_alert(
                                 app,
                                 chat_id,
-                                " تغییر ظرفیت تاریخ انتخابی:\n\n"
-                                f" تاریخ: {html.escape(target_date)}\n"
-                                f" ظرفیت جدید: {html.escape(curr_seats)}",
+                                "🔔 <b>تغییر ظرفیت تاریخ انتخابی:</b>\n\n"
+                                f"📅 <b>تاریخ:</b> {html.escape(target_date)}\n"
+                                f"💺 <b>ظرفیت جدید:</b> {html.escape(curr_seats)}",
                             )
 
                     # بررسی باز شدن تاریخ جدید نزدیک
@@ -1032,12 +1048,12 @@ async def global_monitoring_loop(app):
                     ]
                     if new_dates_found:
                         new_dates_str = "\n".join(
-                            [f"• {html.escape(d)}" for d in new_dates_found]
+                            [f"• 📅 {html.escape(d)}" for d in new_dates_found]
                         )
                         await send_alert(
                             app,
                             chat_id,
-                            f" تاریخ‌های جدید در سایت مشاهده شد:\n\n{new_dates_str}",
+                            f"🎉 <b>تاریخ‌های جدید در سایت مشاهده شد:</b>\n\n{new_dates_str}",
                         )
                         await save_monitor(
                             chat_id,
@@ -1075,7 +1091,7 @@ async def global_monitoring_loop(app):
                                     old_seat = seat_pair.split(":")[-1]
                             if old_seat and old_seat != match_item["seats"]:
                                 changes.append(
-                                    f"• {html.escape(s_date)}: {html.escape(old_seat)} ➔ {html.escape(match_item['seats'])}"
+                                    f"• 📅 {html.escape(s_date)}: {html.escape(old_seat)} ➔ {html.escape(match_item['seats'])}"
                                 )
 
                     if changes:
@@ -1091,7 +1107,7 @@ async def global_monitoring_loop(app):
                         await send_alert(
                             app,
                             chat_id,
-                            " تغییر ظرفیت در تاریخ‌های انتخابی شما:\n\n"
+                            "🔔 <b>تغییر ظرفیت در تاریخ‌های انتخابی شما:</b>\n\n"
                             + "\n".join(changes),
                         )
         except Exception as loop_e:
@@ -1125,7 +1141,7 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(
         MessageHandler(
-            filters.Regex("^( برگشت به منوی اصلی| برگشت به صفحه قبل)$"),
+            filters.Regex("^(🔙 برگشت به منوی اصلی|↩️ برگشت به صفحه قبل| برگشت به منوی اصلی| برگشت به صفحه قبل)$"),
             handle_text_buttons,
         )
     )
