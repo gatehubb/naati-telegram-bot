@@ -124,7 +124,7 @@ PERSIAN_MONTHS = [
 ]
 
 
-def convert_sydney_str_to_tehran_info(sydney_date_str):
+def convert_sydney_str_to_tehran_info(sydney_date_str, short_mode=False):
     """رشته ورودی مانند '01-10-2026 10:45 AM' را گرفته و به زمان تهران و تاریخ شمسی تبدیل می‌کند"""
     try:
         clean_str = re.sub(r"\s+", " ", sydney_date_str.strip())
@@ -140,6 +140,9 @@ def convert_sydney_str_to_tehran_info(sydney_date_str):
         month_name = PERSIAN_MONTHS[jm - 1]
 
         time_str = dt_tehran.strftime("%H:%M")
+        
+        if short_mode:
+            return f"{jd} {month_name} - ساعت {time_str} (تهران)"
         return f"{weekday_name} {jd} {month_name} {jy} - ساعت {time_str} (تهران)"
     except Exception as e:
         logging.error(f"Error converting date timezone: {e}")
@@ -834,9 +837,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         keyboard = []
         for idx, item in enumerate(data[:10]):
+            tehran_short = convert_sydney_str_to_tehran_info(item['date'], short_mode=True)
+            button_label = f"📅 {item['date']} (💺 {item['seats']}) | 🇮🇷 {tehran_short}"
             keyboard.append([
                 InlineKeyboardButton(
-                    f"📅 {item['date']} (💺 {item['seats']})",
+                    button_label,
                     callback_data=f"select_single_{idx}",
                 )
             ])
@@ -954,9 +959,11 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
     keyboard = []
     for idx, item in enumerate(data[:10]):
         check = "✅ " if idx in selections else "⬜ "
+        tehran_short = convert_sydney_str_to_tehran_info(item['date'], short_mode=True)
+        button_label = f"{check}{item['date']} (💺 {item['seats']}) | 🇮🇷 {tehran_short}"
         keyboard.append([
             InlineKeyboardButton(
-                f"{check}{item['date']} (💺 {item['seats']})",
+                button_label,
                 callback_data=f"toggle_multi_{idx}",
             )
         ])
