@@ -9,7 +9,13 @@ import sys
 import threading
 import time
 from datetime import datetime
-from zoneinfo import ZoneInfo
+
+# سازگاری کامل zoneinfo برای نسخه‌های مختلف پایتون
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
+
 from flask import Flask
 from playwright.async_api import async_playwright
 from telegram import (
@@ -35,7 +41,7 @@ logging.basicConfig(
 )
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-# ==================== تنظیمات متغیرهای محیطی ====================
+# ==================== تنظیمات متغیرهای محیطی و توکن جدید ====================
 TELEGRAM_TOKEN = os.environ.get(
     "BOT_TOKEN", "8708901411:AAH7TY1s81E9maAz-fRySW7vGILZNNhnArA"
 ).strip()
@@ -56,7 +62,7 @@ MAIN_MENU_TEXT = (
 )
 
 
-# ==================== توابع تبدیل زمان و تاریخ شمسی بدون کتابخانه اضافه ====================
+# ==================== توابع تبدیل زمان و تاریخ شمسی ====================
 def gregorian_to_jalali(gy, gm, gd):
     g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
@@ -140,7 +146,7 @@ def convert_sydney_str_to_tehran_info(sydney_date_str, short_mode=False):
         month_name = PERSIAN_MONTHS[jm - 1]
 
         time_str = dt_tehran.strftime("%H:%M")
-        
+
         if short_mode:
             return f"{jd} {month_name} - ساعت {time_str} (تهران)"
         return f"{weekday_name} {jd} {month_name} {jy} - ساعت {time_str} (تهران)"
@@ -388,6 +394,7 @@ flask_app = Flask(__name__)
 
 
 @flask_app.route("/")
+@flask_app.route("/health")
 def keep_alive():
     return "NAATI Monitor Bot is Active and Running!", 200
 
