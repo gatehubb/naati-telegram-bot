@@ -25,7 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== کلیدها و ثابت‌ها ====================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8708901411:AAEg1MJrXj4t8zs_KOuYwHMfAW1kZemQTew")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8708901411:AAHSRpRc-1SfD3o4FkqnWoLYcsSQiOy3Nrk")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "2377451")
 DB_NAME = "naati_bot.db"
 
