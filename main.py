@@ -43,7 +43,7 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # ==================== تنظیمات متغیرهای محیطی و توکن جدید ====================
 TELEGRAM_TOKEN = os.environ.get(
-    "BOT_TOKEN", "8708901411:AAH7TY1s81E9maAz-fRySW7vGILZNNhnArA"
+    "BOT_TOKEN", "8708901411:AAHeZrSY6adgVzuNS-xOJQJmPHgsLra2UX8"
 ).strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 
