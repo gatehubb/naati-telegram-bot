@@ -8,6 +8,8 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask
 from playwright.async_api import async_playwright
 from telegram import (
@@ -34,7 +36,9 @@ logging.basicConfig(
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # ==================== تنظیمات متغیرهای محیطی ====================
-TELEGRAM_TOKEN = os.environ.get("BOT_TOKEN", "8708901411:AAFMxrPf-imYHkuHhKA4Mg5ss-WrTQ78f_I").strip()
+TELEGRAM_TOKEN = os.environ.get(
+    "BOT_TOKEN", "8708901411:AAFMxrPf-imYHkuHhKA4Mg5ss-WrTQ78f_I"
+).strip()
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 
 DB_PATH = "monitors.db"
@@ -52,11 +56,102 @@ MAIN_MENU_TEXT = (
 )
 
 
+# ==================== توابع تبدیل زمان و تاریخ شمسی بدون کتابخانه اضافه ====================
+def gregorian_to_jalali(gy, gm, gd):
+    g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
+
+    gy2 = gy - 1600 if gy > 1600 else gy - 621
+    gm2 = gm - 1
+    gd2 = gd - 1
+
+    g_day_no = (
+        365 * gy2
+        + (gy2 + 3) // 4
+        - (gy2 + 99) // 100
+        + (gy2 + 399) // 400
+    )
+    for i in range(gm2):
+        g_day_no += g_days_in_month[i]
+    if gm2 > 1 and ((gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0)):
+        g_day_no += 1
+    g_day_no += gd2
+
+    j_day_no = g_day_no - 79
+
+    j_np = j_day_no // 12053
+    j_day_no %= 12053
+
+    jy = 979 + 33 * j_np + 4 * (j_day_no // 1461)
+    j_day_no %= 1461
+
+    if j_day_no >= 366:
+        jy += (j_day_no - 1) // 365
+        j_day_no = (j_day_no - 1) % 365
+
+    for i in range(12):
+        if j_day_no < j_days_in_month[i]:
+            jm = i + 1
+            jd = j_day_no + 1
+            break
+        j_day_no -= j_days_in_month[i]
+
+    return jy, jm, jd
+
+
+PERSIAN_WEEKDAYS = [
+    "دوشنبه",
+    "سه‌شنبه",
+    "چهارشنبه",
+    "پنج‌شنبه",
+    "جمعه",
+    "شنبه",
+    "یکشنبه",
+]
+PERSIAN_MONTHS = [
+    "فروردین",
+    "اردیبهشت",
+    "خرداد",
+    "تیر",
+    "مرداد",
+    "شهریور",
+    "مهر",
+    "آبان",
+    "آذر",
+    "دی",
+    "بهمن",
+    "اسفند",
+]
+
+
+def convert_sydney_str_to_tehran_info(sydney_date_str):
+    """رشته ورودی مانند '01-10-2026 10:45 AM' را گرفته و به زمان تهران و تاریخ شمسی تبدیل می‌کند"""
+    try:
+        clean_str = re.sub(r"\s+", " ", sydney_date_str.strip())
+        dt_sydney = datetime.strptime(clean_str, "%d-%m-%Y %I:%M %p")
+        dt_sydney = dt_sydney.replace(tzinfo=ZoneInfo("Australia/Sydney"))
+
+        dt_tehran = dt_sydney.astimezone(ZoneInfo("Asia/Tehran"))
+
+        jy, jm, jd = gregorian_to_jalali(
+            dt_tehran.year, dt_tehran.month, dt_tehran.day
+        )
+        weekday_name = PERSIAN_WEEKDAYS[dt_tehran.weekday()]
+        month_name = PERSIAN_MONTHS[jm - 1]
+
+        time_str = dt_tehran.strftime("%H:%M")
+        return f"{weekday_name} {jd} {month_name} {jy} - ساعت {time_str} (تهران)"
+    except Exception as e:
+        logging.error(f"Error converting date timezone: {e}")
+        return "ساعت تهران نامشخص"
+
+
 # ==================== نصب اتوماتیک مرورگر ====================
 def ensure_playwright_browsers():
     try:
         subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "chromium"], check=True
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
         )
     except Exception as e:
         logging.warning(f"Playwright browser auto-install notice: {e}")
@@ -275,7 +370,9 @@ async def record_failed_attempt(chat_id):
 def _reset_admin_attempts_sync(chat_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM admin_attempts WHERE chat_id = ?", (chat_id,))
+        cursor.execute(
+            "DELETE FROM admin_attempts WHERE chat_id = ?", (chat_id,)
+        )
         conn.commit()
 
 
@@ -317,9 +414,11 @@ async def get_main_inline_keyboard(chat_id=None):
                 "📊 مشاهده وضعیت پایش فعال", callback_data="btn_status"
             )
         ])
-        keyboard.append(
-            [InlineKeyboardButton("⛔ لغو پایش فعلی", callback_data="btn_stop_monitor")]
-        )
+        keyboard.append([
+            InlineKeyboardButton(
+                "⛔ لغو پایش فعلی", callback_data="btn_stop_monitor"
+            )
+        ])
 
     keyboard.append([
         InlineKeyboardButton(
@@ -368,12 +467,15 @@ async def safe_delete_message(
     context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int
 ):
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        await context.bot.delete_message(
+            chat_id=chat_id, message_id=message_id
+        )
     except Exception:
         pass
 
 
 class StatusTracker:
+
     def __init__(self, message):
         self.message = message
         self.steps = []
@@ -393,7 +495,8 @@ class StatusTracker:
 
         full_text = (
             "⚙️ <b>وضعیت پردازش:</b>\n"
-            "<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n"
+            "<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر"
+            " بمانید...)</i>\n\n"
             + "\n".join(self.steps)
         )
         try:
@@ -461,7 +564,9 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                     test_type = (await cells[0].inner_text()).strip()
                     lang = (await cells[1].inner_text()).strip()
                     loc = (await cells[2].inner_text()).strip()
-                    raw_date = (await cells[3].inner_text()).strip().split("\n")[0]
+                    raw_date = (
+                        (await cells[3].inner_text()).strip().replace("\n", " ")
+                    )
                     seats = (await cells[4].inner_text()).strip()
                     all_dates.append({
                         "test_type": test_type,
@@ -503,7 +608,7 @@ def is_match(user_input, site_text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
-    
+
     start_welcome_text = (
         "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
         "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
@@ -514,22 +619,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
-    
+
     await update.message.reply_text(
         text="خوش آمدید!",
         reply_markup=get_persistent_reply_keyboard(),
     )
     main_kb = await get_main_inline_keyboard(chat_id)
-    await update.message.reply_text(start_welcome_text, parse_mode="HTML", reply_markup=main_kb)
+    await update.message.reply_text(
+        start_welcome_text, parse_mode="HTML", reply_markup=main_kb
+    )
 
 
-async def handle_text_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_buttons(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+):
     text = update.message.text
     chat_id = update.effective_chat.id
     USER_TEMP_SELECTIONS.pop(chat_id, None)
-    if text in ["🔙 برگشت به منوی اصلی", "↩️ برگشت به صفحه قبل", " برگشت به منوی اصلی", " برگشت به صفحه قبل"]:
+    if text in [
+        "🔙 برگشت به منوی اصلی",
+        "↩️ برگشت به صفحه قبل",
+        " برگشت به منوی اصلی",
+        " برگشت به صفحه قبل",
+    ]:
         main_kb = await get_main_inline_keyboard(chat_id)
-        await update.message.reply_text(MAIN_MENU_TEXT, parse_mode="HTML", reply_markup=main_kb)
+        await update.message.reply_text(
+            MAIN_MENU_TEXT, parse_mode="HTML", reply_markup=main_kb
+        )
 
 
 async def show_status(chat_id):
@@ -539,21 +655,27 @@ async def show_status(chat_id):
     mode = monitor_info.get("mode")
     if mode == "single":
         d = html.escape(str(monitor_info["target_date"]))
+        tehran_str = convert_sydney_str_to_tehran_info(monitor_info["target_date"])
         s = html.escape(str(monitor_info["last_seats"]))
         return (
             f"🎯 <b>پایش تکی فعال است:</b>\n\n"
-            f"📅 <b>تاریخ:</b> {d}\n"
+            f"📅 <b>تاریخ (سیدنی):</b> {d}\n"
+            f"⏰ <b>معادل تهران:</b> {html.escape(tehran_str)}\n"
             f"💺 <b>آخرین ظرفیت ثبت‌شده:</b> {s}\n\n"
             f"🔔 <b>شرط هشدار:</b> تغییر ظرفیت این تاریخ یا باز شدن تاریخ‌های جدید در سایت."
         )
     elif mode == "multi":
-        dates_list = [
-            html.escape(d) for d in monitor_info.get("selected_dates", [])
-        ]
+        dates_list = []
+        for d in monitor_info.get("selected_dates", []):
+            t_str = convert_sydney_str_to_tehran_info(d)
+            dates_list.append(
+                f"• {html.escape(d)}\n  ⏰ <i>{html.escape(t_str)}</i>"
+            )
+
         seats_info = html.escape(str(monitor_info["last_seats"]))
         return (
             f"📌 <b>پایش چندتایی فعال است:</b>\n\n"
-            f"📅 <b>تاریخ‌های تحت پایش:</b>\n{', '.join(dates_list)}\n\n"
+            f"📅 <b>تاریخ‌های تحت پایش:</b>\n" + "\n".join(dates_list) + "\n\n"
             f"💺 <b>آخرین وضعیت ظرفیت‌ها:</b>\n{seats_info}"
         )
 
@@ -684,12 +806,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["cached_dates"] = data
         msg = "🗓️ <b>تاریخ‌های فعال آزمون CCL فارسی در سایت:</b>\n\n"
         for idx, item in enumerate(data, 1):
+            tehran_time_info = convert_sydney_str_to_tehran_info(item["date"])
             msg += (
                 f"{idx}. 📍 {html.escape(item['location'])} | "
                 f"📅 {html.escape(item['date'])} | "
                 f"💺 {html.escape(item['seats'])}\n"
+                f"    ⏰ <i>{html.escape(tehran_time_info)}</i>\n\n"
             )
-        msg += "\n👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>"
+        msg += "👇 <b>لطفاً نحوه پایش را مشخص کنید:</b>"
         await context.bot.send_message(
             chat_id,
             msg,
@@ -745,10 +869,13 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             error_notified=0,
         )
         d_safe = html.escape(selected_item["date"])
+        t_tehran_safe = html.escape(
+            convert_sydney_str_to_tehran_info(selected_item["date"])
+        )
         s_safe = html.escape(selected_item["seats"])
         await context.bot.send_message(
             chat_id,
-            f"✅ <b>پایش تکی فعال شد!</b>\n\n📅 <b>تاریخ انتخابی:</b> {d_safe}\n💺 <b>ظرفیت فعلی:</b> {s_safe}\n\n🔔 در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.",
+            f"✅ <b>پایش تکی فعال شد!</b>\n\n📅 <b>تاریخ (سیدنی):</b> {d_safe}\n⏰ <b>زمان تهران:</b> {t_tehran_safe}\n💺 <b>ظرفیت فعلی:</b> {s_safe}\n\n🔔 در صورت تغییر ظرفیت یا اضافه شدن تاریخ جدید اطلاع داده می‌شود.",
             parse_mode="HTML",
             reply_markup=get_single_main_menu_keyboard(),
         )
@@ -768,7 +895,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             if len(selections) >= 4:
                 await query.answer(
-                    "⚠️ حداکثر می‌توانید ۴ تاریخ را انتخاب کنید!", show_alert=True
+                    "⚠️ حداکثر می‌توانید ۴ تاریخ را انتخاب کنید!",
+                    show_alert=True,
                 )
                 return
             selections.add(idx)
@@ -798,7 +926,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_seats=last_seats,
             error_notified=0,
         )
-        dates_str = "\n".join([f"• 📅 {html.escape(d)}" for d in selected_dates])
+        dates_formatted = []
+        for d in selected_dates:
+            t_tehran = convert_sydney_str_to_tehran_info(d)
+            dates_formatted.append(
+                f"• 📅 {html.escape(d)}\n  ⏰ <i>{html.escape(t_tehran)}</i>"
+            )
+
+        dates_str = "\n".join(dates_formatted)
         await context.bot.send_message(
             chat_id,
             f"✅ <b>پایش چندتایی فعال شد!</b>\n\n{dates_str}",
@@ -827,7 +962,8 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
         ])
     keyboard.append([
         InlineKeyboardButton(
-            f"📥 ثبت نهایی انتخاب‌ها ({len(selections)}/4)", callback_data="submit_multi"
+            f"📥 ثبت نهایی انتخاب‌ها ({len(selections)}/4)",
+            callback_data="submit_multi",
         )
     ])
     keyboard.append(
@@ -930,7 +1066,9 @@ async def send_admin_panel_details(
                     if info.get("username")
                     else f"ID: {cid}"
                 )
-                mode_str = "🎯 تکی" if info["mode"] == "single" else "📌 چندتایی"
+                mode_str = (
+                    "🎯 تکی" if info["mode"] == "single" else "📌 چندتایی"
+                )
                 if info["mode"] == "single":
                     t_date = html.escape(str(info["target_date"]))
                     l_seats = html.escape(str(info["last_seats"]))
@@ -997,9 +1135,10 @@ async def global_monitoring_loop(app):
                             await app.bot.send_message(
                                 chat_id=chat_id,
                                 text=(
-                                    "⚠️ <b>خطا در پایش درخواست شما!</b>\n\nدر میانه"
-                                    " زمان پایش، ربات نتوانست وارد سایت شود یا"
-                                    f" داده‌ها را بررسی کند.\n\n❌ علت خطا:\n{safe_err}"
+                                    "⚠️ <b>خطا در پایش درخواست شما!</b>\n\nدر"
+                                    " میانه زمان پایش، ربات نتوانست وارد سایت"
+                                    " شود یا داده‌ها را بررسی کند.\n\n❌ علت"
+                                    f" خطا:\n{safe_err}"
                                 ),
                                 parse_mode="HTML",
                                 reply_markup=get_error_retry_keyboard(),
@@ -1007,7 +1146,8 @@ async def global_monitoring_loop(app):
                             await update_error_status(chat_id, 1)
                         except Exception as send_err:
                             logging.error(
-                                f"Failed to send error notification to {chat_id}: {send_err}"
+                                "Failed to send error notification to"
+                                f" {chat_id}: {send_err}"
                             )
                 continue
 
@@ -1040,11 +1180,15 @@ async def global_monitoring_loop(app):
                                 ),
                                 error_notified=0,
                             )
+                            t_tehran = convert_sydney_str_to_tehran_info(
+                                target_date
+                            )
                             await send_alert(
                                 app,
                                 chat_id,
                                 "🔔 <b>تغییر ظرفیت تاریخ انتخابی:</b>\n\n"
-                                f"📅 <b>تاریخ:</b> {html.escape(target_date)}\n"
+                                f"📅 <b>تاریخ (سیدنی):</b> {html.escape(target_date)}\n"
+                                f"⏰ <b>زمان تهران:</b> {html.escape(t_tehran)}\n"
                                 f"💺 <b>ظرفیت جدید:</b> {html.escape(curr_seats)}",
                             )
 
@@ -1052,16 +1196,24 @@ async def global_monitoring_loop(app):
                     new_dates_found = [
                         item["date"]
                         for item in data
-                        if not any(is_match(item["date"], cd) for cd in cached_dates)
+                        if not any(
+                            is_match(item["date"], cd) for cd in cached_dates
+                        )
                     ]
                     if new_dates_found:
-                        new_dates_str = "\n".join(
-                            [f"• 📅 {html.escape(d)}" for d in new_dates_found]
-                        )
+                        formatted_new = []
+                        for d in new_dates_found:
+                            t_tehran = convert_sydney_str_to_tehran_info(d)
+                            formatted_new.append(
+                                f"• 📅 {html.escape(d)}\n  ⏰ <i>{html.escape(t_tehran)}</i>"
+                            )
+
+                        new_dates_str = "\n".join(formatted_new)
                         await send_alert(
                             app,
                             chat_id,
-                            f"🎉 <b>تاریخ‌های جدید در سایت مشاهده شد:</b>\n\n{new_dates_str}",
+                            "🎉 <b>تاریخ‌های جدید در سایت مشاهده"
+                            f" شد:</b>\n\n{new_dates_str}",
                         )
                         await save_monitor(
                             chat_id,
@@ -1097,8 +1249,11 @@ async def global_monitoring_loop(app):
                                 if seat_pair.startswith(s_date + ":"):
                                     old_seat = seat_pair.split(":")[-1]
                             if old_seat and old_seat != match_item["seats"]:
+                                t_tehran = convert_sydney_str_to_tehran_info(
+                                    s_date
+                                )
                                 changes.append(
-                                    f"• 📅 {html.escape(s_date)}: {html.escape(old_seat)} ➔ {html.escape(match_item['seats'])}"
+                                    f"• 📅 {html.escape(s_date)}\n  ⏰ <i>{html.escape(t_tehran)}</i>\n  💺 {html.escape(old_seat)} ➔ {html.escape(match_item['seats'])}"
                                 )
 
                     if changes:
@@ -1114,7 +1269,8 @@ async def global_monitoring_loop(app):
                         await send_alert(
                             app,
                             chat_id,
-                            "🔔 <b>تغییر ظرفیت در تاریخ‌های انتخابی شما:</b>\n\n"
+                            "🔔 <b>تغییر ظرفیت در تاریخ‌های انتخابی"
+                            " شما:</b>\n\n"
                             + "\n".join(changes),
                         )
         except Exception as loop_e:
@@ -1147,7 +1303,10 @@ async def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(
         MessageHandler(
-            filters.Regex("^(🔙 برگشت به منوی اصلی|↩️ برگشت به صفحه قبل| برگشت به منوی اصلی| برگشت به صفحه قبل)$"),
+            filters.Regex(
+                "^(🔙 برگشت به منوی اصلی|↩️ برگشت به صفحه قبل| برگشت"
+                " به منوی اصلی| برگشت به صفحه قبل)$"
+            ),
             handle_text_buttons,
         )
     )
