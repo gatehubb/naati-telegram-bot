@@ -45,7 +45,6 @@ DB_PATH = "monitors.db"
 USER_TEMP_SELECTIONS = {}
 
 # ثبت تاریخچه‌ی خطاهای پایش برای هر کاربر جهت اعمال شرط ۵ بار در ۱ ساعت
-# ساختار: { chat_id: [timestamp1, timestamp2, ...] }
 MONITOR_ERRORS_HISTORY = {}
 
 # متن استاندارد منوی اصلی
@@ -60,7 +59,7 @@ MAIN_MENU_TEXT = (
 )
 
 
-# ==================== توابع تبدیل زمان و تاریخ شمسی بدون کتابخانه اضافه ====================
+# ==================== توابع تبدیل زمان و تاریخ شمسی ====================
 def gregorian_to_jalali(gy, gm, gd):
     g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
@@ -129,7 +128,6 @@ PERSIAN_MONTHS = [
 
 
 def convert_sydney_str_to_tehran_info(sydney_date_str):
-    """رشته ورودی مانند '01-10-2026 10:45 AM' را گرفته و به زمان تهران و تاریخ شمسی تبدیل می‌کند"""
     try:
         clean_str = re.sub(r"\s+", " ", sydney_date_str.strip())
         dt_sydney = datetime.strptime(clean_str, "%d-%m-%Y %I:%M %p")
@@ -555,9 +553,9 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 await tracker.update("فیلتر آزمون CCL", "success")
                 await tracker.update("فیلتر زبان Persian", "in_progress")
 
-            # حل مشکل Timeout: انتظار تا زمانی که منوی دوم از حالت disabled خارج شود
+            # حل صریح مشکل تاخیر منوی زبان: انتظار برای فعال شدن (State Enabled)
             second_select = selects.nth(1)
-            await second_select.wait_for(state="enabled", timeout=15000)
+            await second_select.wait_for(state="enabled", timeout=20000)
             await second_select.select_option(label="Persian")
 
             await page.wait_for_timeout(1500)
@@ -613,27 +611,26 @@ def is_match(user_input, site_text):
     return clean_user in clean_site or clean_site in clean_user
 
 
-# ==================== مدیریت خطاهای پایش متوالی ====================
+# ==================== سیستم کنترل خطای متوالی ====================
 async def record_monitor_error_and_check_cancel(app, chat_id, error_details):
-    """بررسی و مدیریت شرط رخ دادن ۵ خطا در طول ۱ ساعت و لغو پایش"""
+    """بررسی ۵ خطا در یک ساعت و لغو پایش"""
     now = time.time()
     history = MONITOR_ERRORS_HISTORY.get(chat_id, [])
-    # فیلتر کردن خطاهای بیش از ۱ ساعت گذشته (۳۶۰۰ ثانیه)
+    # فیلتر خطاهای ۱ ساعت گذشته
     history = [t for t in history if now - t <= 3600]
     history.append(now)
     MONITOR_ERRORS_HISTORY[chat_id] = history
 
     if len(history) >= 5:
-        # لغو پایش از دیتابیس
         await remove_monitor(chat_id)
         MONITOR_ERRORS_HISTORY.pop(chat_id, None)
 
         safe_err = html.escape(str(error_details)[:250])
         cancel_msg = (
             "⚠️ <b>پایش شما متوقف و کنسل شد!</b>\n\n"
-            f"به دلیل بروز ۵ بار خطای متوالی در اتصال به NAATI طی یک ساعت گذشته، روند پایش لغو گردید.\n\n"
-            f"<b>آخرین خطای ثبت‌شده:</b>\n<code>{safe_err}</code>\n\n"
-            "جهت شروع مجدد، لطفاً روی دکمه زیر کلیک کرده و پایش را مجدداً فعال کنید."
+            "به دلیل بروز ۵ بار خطای متوالی در اتصال به سایت NAATI ظرف یک ساعت گذشته، پایش شما به‌طور خودکار لغو گردید.\n\n"
+            f"<b>علت آخرین خطا:</b>\n<code>{safe_err}</code>\n\n"
+            "جهت فعال‌سازی مجدد، روی دکمه زیر کلیک کنید:"
         )
         try:
             await app.bot.send_message(
@@ -643,7 +640,7 @@ async def record_monitor_error_and_check_cancel(app, chat_id, error_details):
                 reply_markup=get_error_retry_keyboard(),
             )
         except Exception as e:
-            logging.error(f"Failed to send cancellation alert to {chat_id}: {e}")
+            logging.error(f"Failed to send cancel message to {chat_id}: {e}")
         return True
     return False
 
@@ -801,17 +798,22 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await tracker.delete_status_message()
 
         if not data:
-            safe_err = (
-                html.escape(str(error_err)[:250])
-                if error_err
-                else "عدم پاسخگویی سرور NAATI"
+            # کنترل و ثبت ۵ بار خطا
+            cancelled = await record_monitor_error_and_check_cancel(
+                context.application, chat_id, error_err
             )
-            await context.bot.send_message(
-                chat_id,
-                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ علت خطا:\n{safe_err}",
-                parse_mode="HTML",
-                reply_markup=get_error_retry_keyboard(),
-            )
+            if not cancelled:
+                safe_err = (
+                    html.escape(str(error_err)[:250])
+                    if error_err
+                    else "عدم پاسخگویی سرور NAATI"
+                )
+                await context.bot.send_message(
+                    chat_id,
+                    f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ علت خطا:\n{safe_err}",
+                    parse_mode="HTML",
+                    reply_markup=get_error_retry_keyboard(),
+                )
         else:
             await update_error_status(chat_id, 0)
             MONITOR_ERRORS_HISTORY.pop(chat_id, None)
