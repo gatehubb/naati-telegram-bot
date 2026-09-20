@@ -49,9 +49,9 @@ MAIN_MENU_TEXT = (
     "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
     "<b>امکانات ربات:</b>\n"
     "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-    "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+    "• پایش یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
     "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
-    "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
+    "• پایش اتوماتیک و ارسال آنی هشدار تغییر ظرفیت\n\n"
     "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
 )
 
@@ -664,16 +664,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
-
-    await update.message.reply_text(
-        text="خوش آمدید!",
-        reply_markup=get_persistent_reply_keyboard(),
-    )
-    main_kb = await get_main_inline_keyboard(chat_id)
-    await update.message.reply_text(
-        start_welcome_text, parse_mode="HTML", reply_markup=main_kb
-    )
-
 
 async def handle_text_buttons(
     update: Update, context: ContextTypes.DEFAULT_TYPE
