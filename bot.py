@@ -665,6 +665,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
     )
 
+    # ارسال کل متن و منو در قالب ۱ پیام واحد
+    await update.message.reply_text(
+        text=welcome_text,
+        parse_mode="HTML",
+        reply_markup=main_menu_keyboard # کیبورد دکمه‌های شما
+    )
+    main_kb = await get_main_inline_keyboard(chat_id)
+    await update.message.reply_text(
+        start_welcome_text, parse_mode="HTML", reply_markup=main_kb
+    )
+
+
 async def handle_text_buttons(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ):
