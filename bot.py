@@ -556,7 +556,7 @@ class StatusTracker:
             pass
 
 
-# ==================== دریافت داده‌ها از NAATI (اصلاح شده) ====================
+# ==================== دریافت داده‌ها از NAATI ====================
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
@@ -573,58 +573,35 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                     "--disable-gpu",
                 ],
             )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            context = await browser.new_context()
             page = await context.new_page()
-            
             if tracker:
                 await tracker.update("شروع مرورگر", "success")
                 await tracker.update("اتصال به NAATI", "in_progress")
-                
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="networkidle",
                 timeout=45000,
             )
-            
             if tracker:
                 await tracker.update("اتصال به NAATI", "success")
                 await tracker.update("فیلتر آزمون CCL", "in_progress")
-                
-            # انتخاب آزمون CCL
-            type_select = page.locator("select").nth(0)
-            await type_select.wait_for(state="visible", timeout=15000)
-            await type_select.select_option(label="Credentialed Community Language Test")
-            
+            selects = page.locator("select")
+            await selects.nth(0).wait_for(timeout=10000)
+            await selects.nth(0).select_option(
+                label="Credentialed Community Language Test"
+            )
+            await page.wait_for_timeout(1000)
             if tracker:
                 await tracker.update("فیلتر آزمون CCL", "success")
                 await tracker.update("فیلتر زبان Persian", "in_progress")
-            
-            # منتظر ماندن برای فعال شدن دراپ‌داون زبان (حذف حالت disabled)
-            lang_select = page.locator("select").nth(1)
-            await lang_select.wait_for(state="attached", timeout=15000)
-            
-            # انتظار تا زمانی که منو از حالت disabled خارج شود
-            await page.wait_for_function(
-                "sel => !sel.disabled", 
-                arg=await lang_select.element_handle(), 
-                timeout=15000
-            )
-            
-            # انتخاب زبان Persian
-            await lang_select.select_option(label="Persian")
-            
-            # انتظار برای بارگذاری جدول نتایج
-            await page.wait_for_timeout(2000)
-            
+            await selects.nth(1).select_option(label="Persian")
+            await page.wait_for_timeout(1500)
             if tracker:
                 await tracker.update("فیلتر زبان Persian", "success")
                 await tracker.update("استخراج جدول", "in_progress")
-                
-            await page.wait_for_selector("table tbody tr", timeout=15000)
+            await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
-            
             all_dates = []
             for row in rows:
                 cells = await row.query_selector_all("td")
@@ -643,12 +620,9 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                         "date": raw_date,
                         "seats": seats,
                     })
-                    
             if tracker:
                 await tracker.update("استخراج جدول", "success")
-                
             return all_dates, None
-
         except Exception as e:
             error_details = str(e)
             logging.error(f"Error fetching data: {error_details}")
@@ -660,12 +634,12 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 )
                 await tracker.update(last_step_text, "failed", error_details)
             return None, error_details
-            
         finally:
             if context:
                 await context.close()
             if browser:
                 await browser.close()
+
 
 def is_match(user_input, site_text):
     if not user_input or not site_text:
