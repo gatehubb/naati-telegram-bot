@@ -49,7 +49,7 @@ MAIN_MENU_TEXT = (
     "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
     "<b>امکانات ربات:</b>\n"
     "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-    "• پایش یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+    "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
     "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
     "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
     "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
@@ -556,7 +556,7 @@ class StatusTracker:
             pass
 
 
-# ==================== دریافت داده‌ها از NAATI ====================
+# ==================== دریافت داده‌ها از NAATI (اصلاح روش فیلتر) ====================
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
@@ -575,33 +575,51 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             )
             context = await browser.new_context()
             page = await context.new_page()
+
             if tracker:
                 await tracker.update("شروع مرورگر", "success")
                 await tracker.update("اتصال به NAATI", "in_progress")
+
             await page.goto(
                 "https://www.naati.com.au/test-date/",
-                wait_until="networkidle",
+                wait_until="domcontentloaded",
                 timeout=45000,
             )
+
             if tracker:
                 await tracker.update("اتصال به NAATI", "success")
                 await tracker.update("فیلتر آزمون CCL", "in_progress")
+
+            # ۱. انتخاب آزمون CCL با استفاده از ساختار مطمئن کد اصلی
+            await page.wait_for_selector("select", timeout=20000)
             selects = page.locator("select")
-            await selects.nth(0).wait_for(timeout=10000)
-            await selects.nth(0).select_option(
-                label="Credentialed Community Language Test"
-            )
-            await page.wait_for_timeout(1000)
+
+            # انتخاب نوع آزمون
+            await selects.nth(0).select_option(label="Credentialed Community Language Test")
+            await page.wait_for_timeout(1500)
+
             if tracker:
                 await tracker.update("فیلتر آزمون CCL", "success")
                 await tracker.update("فیلتر زبان Persian", "in_progress")
-            await selects.nth(1).select_option(label="Persian")
-            await page.wait_for_timeout(1500)
+
+            # ۲. انتخاب زبان Persian با روش ترکیبی بر اساس متن یا Value جهت جلوگیری از Timeout
+            language_select = selects.nth(1)
+            try:
+                await language_select.select_option(label="Persian", timeout=10000)
+            except Exception:
+                # پشتیبانی متقاطع در صورت جاوااسکریپت داینامیک
+                await language_select.select_option(value="Persian", timeout=10000)
+
+            await page.wait_for_timeout(2000)
+
             if tracker:
                 await tracker.update("فیلتر زبان Persian", "success")
                 await tracker.update("استخراج جدول", "in_progress")
-            await page.wait_for_selector("table tbody tr", timeout=10000)
+
+            # ۳. انتظار برای بارگذاری جدول تاریخ‌ها
+            await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
+
             all_dates = []
             for row in rows:
                 cells = await row.query_selector_all("td")
@@ -613,16 +631,21 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                         (await cells[3].inner_text()).strip().replace("\n", " ")
                     )
                     seats = (await cells[4].inner_text()).strip()
-                    all_dates.append({
-                        "test_type": test_type,
-                        "language": lang,
-                        "location": loc,
-                        "date": raw_date,
-                        "seats": seats,
-                    })
+                    
+                    # استخراج فقط در صورتی که زبان فارسی یا CCL باشد
+                    if "persian" in lang.lower() or "credentialed" in test_type.lower():
+                        all_dates.append({
+                            "test_type": test_type,
+                            "language": lang,
+                            "location": loc,
+                            "date": raw_date,
+                            "seats": seats,
+                        })
+
             if tracker:
                 await tracker.update("استخراج جدول", "success")
             return all_dates, None
+
         except Exception as e:
             error_details = str(e)
             logging.error(f"Error fetching data: {error_details}")
@@ -659,7 +682,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
         "<b>امکانات ربات:</b>\n"
         "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-        "• پایش یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
         "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
         "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
@@ -801,7 +824,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await tracker.delete_status_message()
 
         if not data:
-            if error_err and "select option action" in error_err:
+            if error_err and ("select option action" in error_err or "Timeout" in error_err):
                 is_cancelled = await record_error_and_check_cancel(chat_id)
                 if is_cancelled:
                     cancel_keyboard = InlineKeyboardMarkup([
@@ -851,7 +874,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_delete_message(context, chat_id, current_msg_id)
 
         if not data:
-            if error_err and "select option action" in error_err:
+            if error_err and ("select option action" in error_err or "Timeout" in error_err):
                 is_cancelled = await record_error_and_check_cancel(chat_id)
                 if is_cancelled:
                     cancel_keyboard = InlineKeyboardMarkup([
@@ -1069,7 +1092,7 @@ async def scheduled_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     data, error_err = await fetch_filtered_naati_dates(None)
 
     if not data:
-        if error_err and "select option action" in error_err:
+        if error_err and ("select option action" in error_err or "Timeout" in error_err):
             for chat_id in list(all_monitors.keys()):
                 is_cancelled = await record_error_and_check_cancel(chat_id)
                 if is_cancelled:
