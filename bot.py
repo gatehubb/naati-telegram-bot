@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 from flask import Flask
 from playwright.async_api import async_playwright
@@ -44,22 +44,19 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "2377451").strip()
 DB_PATH = "monitors.db"
 USER_TEMP_SELECTIONS = {}
 
-# ثبت تاریخچه‌ی خطاهای پایش برای هر کاربر جهت اعمال شرط ۵ بار در ۱ ساعت
-MONITOR_ERRORS_HISTORY = {}
-
 # متن استاندارد منوی اصلی
 MAIN_MENU_TEXT = (
     "🤖 <b>دستیار هوشمند پایش آزمون NAATI CCL</b>\n\n"
     "<b>امکانات ربات:</b>\n"
     "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-    "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+    "• پایش یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
     "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
     "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
     "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
 )
 
 
-# ==================== توابع تبدیل زمان و تاریخ شمسی ====================
+# ==================== توابع تبدیل زمان و تاریخ شمسی بدون کتابخانه اضافه ====================
 def gregorian_to_jalali(gy, gm, gd):
     g_days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     j_days_in_month = [31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 29]
@@ -181,7 +178,9 @@ def _init_db_sync():
                 selected_dates TEXT,
                 last_seats TEXT,
                 cached_snapshot TEXT,
-                error_notified INTEGER DEFAULT 0
+                error_notified INTEGER DEFAULT 0,
+                consecutive_errors INTEGER DEFAULT 0,
+                first_error_time REAL DEFAULT 0
             )
         """)
         cursor.execute("""
@@ -212,8 +211,8 @@ def _save_monitor_sync(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO monitors (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT OR REPLACE INTO monitors (chat_id, username, mode, target_date, selected_dates, last_seats, cached_snapshot, error_notified, consecutive_errors, first_error_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
         """,
             (
                 chat_id,
@@ -256,7 +255,7 @@ def _get_monitor_sync(chat_id):
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT mode, target_date, selected_dates, last_seats, cached_snapshot, username, error_notified FROM monitors WHERE chat_id = ?",
+            "SELECT mode, target_date, selected_dates, last_seats, cached_snapshot, username, error_notified, consecutive_errors, first_error_time FROM monitors WHERE chat_id = ?",
             (chat_id,),
         )
         row = cursor.fetchone()
@@ -269,6 +268,8 @@ def _get_monitor_sync(chat_id):
                 "cached_snapshot": row[4].split(",") if row[4] else [],
                 "username": row[5],
                 "error_notified": row[6],
+                "consecutive_errors": row[7] if len(row) > 7 and row[7] is not None else 0,
+                "first_error_time": row[8] if len(row) > 8 and row[8] is not None else 0,
             }
     return None
 
@@ -276,6 +277,48 @@ def _get_monitor_sync(chat_id):
 async def get_monitor(chat_id):
     return await asyncio.to_thread(_get_monitor_sync, chat_id)
 
+
+def _record_error_and_check_cancel_sync(chat_id):
+    """ثبت خطای متوالی و چک کردن شرط ۷ بار در ۱ ساعت"""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT consecutive_errors, first_error_time FROM monitors WHERE chat_id = ?", (chat_id,))
+        row = cursor.fetchone()
+        if not row:
+            return False
+        
+        curr_errors = row[0] if row[0] else 0
+        first_time = row[1] if row[1] else 0
+        now = time.time()
+        
+        if first_time == 0 or (now - first_time > 3600):
+            new_errors = 1
+            new_first_time = now
+        else:
+            new_errors = curr_errors + 1
+            new_first_time = first_time
+            
+        if new_errors >= 7:
+            cursor.execute("DELETE FROM monitors WHERE chat_id = ?", (chat_id,))
+            conn.commit()
+            return True
+        else:
+            cursor.execute("UPDATE monitors SET consecutive_errors = ?, first_error_time = ? WHERE chat_id = ?", 
+                           (new_errors, new_first_time, chat_id))
+            conn.commit()
+            return False
+
+async def record_error_and_check_cancel(chat_id):
+    return await asyncio.to_thread(_record_error_and_check_cancel_sync, chat_id)
+
+def _reset_error_counter_sync(chat_id):
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE monitors SET consecutive_errors = 0, first_error_time = 0 WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+
+async def reset_error_counter(chat_id):
+    await asyncio.to_thread(_reset_error_counter_sync, chat_id)
 
 def _update_error_status_sync(chat_id, status_value):
     with get_db_connection() as conn:
@@ -552,12 +595,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             if tracker:
                 await tracker.update("فیلتر آزمون CCL", "success")
                 await tracker.update("فیلتر زبان Persian", "in_progress")
-
-            # حل صریح مشکل تاخیر منوی زبان: انتظار برای فعال شدن (State Enabled)
-            second_select = selects.nth(1)
-            await second_select.wait_for(state="enabled", timeout=20000)
-            await second_select.select_option(label="Persian")
-
+            await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
                 await tracker.update("فیلتر زبان Persian", "success")
@@ -611,40 +649,6 @@ def is_match(user_input, site_text):
     return clean_user in clean_site or clean_site in clean_user
 
 
-# ==================== سیستم کنترل خطای متوالی ====================
-async def record_monitor_error_and_check_cancel(app, chat_id, error_details):
-    """بررسی ۵ خطا در یک ساعت و لغو پایش"""
-    now = time.time()
-    history = MONITOR_ERRORS_HISTORY.get(chat_id, [])
-    # فیلتر خطاهای ۱ ساعت گذشته
-    history = [t for t in history if now - t <= 3600]
-    history.append(now)
-    MONITOR_ERRORS_HISTORY[chat_id] = history
-
-    if len(history) >= 5:
-        await remove_monitor(chat_id)
-        MONITOR_ERRORS_HISTORY.pop(chat_id, None)
-
-        safe_err = html.escape(str(error_details)[:250])
-        cancel_msg = (
-            "⚠️ <b>پایش شما متوقف و کنسل شد!</b>\n\n"
-            "به دلیل بروز ۵ بار خطای متوالی در اتصال به سایت NAATI ظرف یک ساعت گذشته، پایش شما به‌طور خودکار لغو گردید.\n\n"
-            f"<b>علت آخرین خطا:</b>\n<code>{safe_err}</code>\n\n"
-            "جهت فعال‌سازی مجدد، روی دکمه زیر کلیک کنید:"
-        )
-        try:
-            await app.bot.send_message(
-                chat_id=chat_id,
-                text=cancel_msg,
-                parse_mode="HTML",
-                reply_markup=get_error_retry_keyboard(),
-            )
-        except Exception as e:
-            logging.error(f"Failed to send cancel message to {chat_id}: {e}")
-        return True
-    return False
-
-
 # ==================== هاندلرهای اصلی ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -655,7 +659,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "به ربات پایش لحظه‌ای ظرفیت آزمون‌های NAATI خوش آمدید.\n\n"
         "<b>امکانات ربات:</b>\n"
         "• دریافت زنده تاریخ‌های فعال آزمون فارسی\n"
-        "• پایش تک یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
+        "• پایش یک تاریخ خاص همراه با اعلام تاریخ‌های جدید\n"
         "• پایش همزمان چندین تاریخ (تا ۴ تاریخ)\n"
         "• پایش اتوماتیک هر ۵ دقیقه یک‌بار و ارسال آنی هشدار تغییر ظرفیت\n\n"
         "جهت شروع، روی دکمه استخراج و انتخاب تاریخ کلیک کنید:"
@@ -766,7 +770,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query.data == "btn_stop_monitor":
         USER_TEMP_SELECTIONS.pop(chat_id, None)
         await remove_monitor(chat_id)
-        MONITOR_ERRORS_HISTORY.pop(chat_id, None)
         await safe_delete_message(context, chat_id, query.message.message_id)
         main_kb = await get_main_inline_keyboard(chat_id)
         await context.bot.send_message(
@@ -798,25 +801,35 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await tracker.delete_status_message()
 
         if not data:
-            # کنترل و ثبت ۵ بار خطا
-            cancelled = await record_monitor_error_and_check_cancel(
-                context.application, chat_id, error_err
+            if error_err and "select option action" in error_err:
+                is_cancelled = await record_error_and_check_cancel(chat_id)
+                if is_cancelled:
+                    cancel_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 فعال‌سازی مجدد پایش", callback_data="btn_list")],
+                        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")]
+                    ])
+                    await context.bot.send_message(
+                        chat_id,
+                        "⚠️ <b>پایش شما کنسل شد!</b>\n\nبه علت بروز ۷ بار خطای متوالی در ارتباط با سایت NAATI در یک ساعت گذشته، پایش شما متوقف گردید.\nبا استفاده از دکمه زیر می‌توانید مجدداً فرآیند را اجرا و پایش را فعال کنید.",
+                        parse_mode="HTML",
+                        reply_markup=cancel_keyboard,
+                    )
+                    return
+
+            safe_err = (
+                html.escape(str(error_err)[:250])
+                if error_err
+                else "عدم پاسخگویی سرور NAATI"
             )
-            if not cancelled:
-                safe_err = (
-                    html.escape(str(error_err)[:250])
-                    if error_err
-                    else "عدم پاسخگویی سرور NAATI"
-                )
-                await context.bot.send_message(
-                    chat_id,
-                    f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ علت خطا:\n{safe_err}",
-                    parse_mode="HTML",
-                    reply_markup=get_error_retry_keyboard(),
-                )
+            await context.bot.send_message(
+                chat_id,
+                f"❌ <b>تلاش مجدد ناموفق بود!</b>\n\n⚠️ علت خطا:\n{safe_err}",
+                parse_mode="HTML",
+                reply_markup=get_error_retry_keyboard(),
+            )
         else:
+            await reset_error_counter(chat_id)
             await update_error_status(chat_id, 0)
-            MONITOR_ERRORS_HISTORY.pop(chat_id, None)
             await context.bot.send_message(
                 chat_id,
                 "✅ <b>اتصال برقرار شد! پایش شما مجدداً بدون مشکل فعال گردید.</b>",
@@ -838,6 +851,21 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_delete_message(context, chat_id, current_msg_id)
 
         if not data:
+            if error_err and "select option action" in error_err:
+                is_cancelled = await record_error_and_check_cancel(chat_id)
+                if is_cancelled:
+                    cancel_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 فعال‌سازی مجدد پایش", callback_data="btn_list")],
+                        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")]
+                    ])
+                    await context.bot.send_message(
+                        chat_id,
+                        "⚠️ <b>پایش شما کنسل شد!</b>\n\nبه علت بروز ۷ بار خطای متوالی در ارتباط با سایت NAATI در یک ساعت گذشته، پایش شما متوقف گردید.\nبا استفاده از دکمه زیر می‌توانید مجدداً فرآیند را اجرا و پایش را فعال کنید.",
+                        parse_mode="HTML",
+                        reply_markup=cancel_keyboard,
+                    )
+                    return
+
             safe_err = (
                 html.escape(str(error_err)[:250])
                 if error_err
@@ -845,7 +873,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await context.bot.send_message(
                 chat_id,
-                f"❌ <b>خطا در بربرقراری ارتباط با سایت NAATI!</b>\n\n⚠️ علت خطا:\n{safe_err}",
+                f"❌ <b>خطا در برقرار ارتباط با سایت NAATI!</b>\n\n⚠️ علت خطا:\n{safe_err}",
                 parse_mode="HTML",
                 reply_markup=get_error_retry_keyboard(),
             )
@@ -916,7 +944,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cached_snapshot=cached_snapshot,
             error_notified=0,
         )
-        MONITOR_ERRORS_HISTORY.pop(chat_id, None)
         d_safe = html.escape(selected_item["date"])
         t_tehran_safe = html.escape(
             convert_sydney_str_to_tehran_info(selected_item["date"])
@@ -975,7 +1002,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_seats=last_seats,
             error_notified=0,
         )
-        MONITOR_ERRORS_HISTORY.pop(chat_id, None)
         dates_formatted = []
         for d in selected_dates:
             t_tehran = convert_sydney_str_to_tehran_info(d)
@@ -997,12 +1023,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def render_multi_select_menu(query, context, chat_id, edit=False):
     data = context.user_data.get("cached_dates", [])
     selections = USER_TEMP_SELECTIONS.get(chat_id, set())
-
     keyboard = []
+
     for idx, item in enumerate(data[:10]):
-        is_selected = idx in selections
-        prefix = "✅ " if is_selected else "▫️ "
-        btn_text = f"{prefix}📅 {item['date']} (💺 {item['seats']})"
+        prefix = "✅ " if idx in selections else "⬜ "
+        btn_text = f"{prefix}{item['date']} (💺 {item['seats']})"
         keyboard.append([
             InlineKeyboardButton(
                 btn_text, callback_data=f"toggle_multi_{idx}"
@@ -1011,7 +1036,7 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
 
     keyboard.append([
         InlineKeyboardButton(
-            f"📥 ثبت و شروع پایش ({len(selections)} تاریخ)",
+            f"✅ تایید انتخاب‌ها ({len(selections)}/۴)",
             callback_data="submit_multi",
         )
     ])
@@ -1020,18 +1045,198 @@ async def render_multi_select_menu(query, context, chat_id, edit=False):
     )
 
     markup = InlineKeyboardMarkup(keyboard)
-    text_content = (
-        "📌 <b>تاریخ‌های مد نظر خود را انتخاب کنید (حداکثر ۴ مورد):</b>"
-    )
+    text = "📌 <b>تاریخ‌های مد نظر را انتخاب کرده و سپس روی تایید بزنید (حداکثر ۴):</b>"
 
     if edit:
         try:
             await query.edit_message_text(
-                text_content, parse_mode="HTML", reply_markup=markup
+                text, parse_mode="HTML", reply_markup=markup
             )
         except Exception:
             pass
     else:
         await context.bot.send_message(
-            chat_id, text_content, parse_mode="HTML", reply_markup=markup
+            chat_id, text, parse_mode="HTML", reply_markup=markup
         )
+
+
+# ==================== جاب پایش خودکار هر ۵ دقیقه ====================
+async def scheduled_monitor_job(context: ContextTypes.DEFAULT_TYPE):
+    all_monitors = await get_all_monitors()
+    if not all_monitors:
+        return
+
+    data, error_err = await fetch_filtered_naati_dates(None)
+
+    if not data:
+        if error_err and "select option action" in error_err:
+            for chat_id in list(all_monitors.keys()):
+                is_cancelled = await record_error_and_check_cancel(chat_id)
+                if is_cancelled:
+                    cancel_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 فعال‌سازی مجدد پایش", callback_data="btn_list")],
+                        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="btn_main")]
+                    ])
+                    try:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="⚠️ <b>پایش شما کنسل شد!</b>\n\nبه علت بروز ۷ بار خطای متوالی در دریافت اطلاعات از سایت NAATI در یک ساعت گذشته، پایش خودکار شما متوقف گردید.\nبا کلیک روی دکمه زیر می‌توانید مجدداً فرآیند را اجرا کنید.",
+                            parse_mode="HTML",
+                            reply_markup=cancel_keyboard,
+                        )
+                    except Exception as e:
+                        logging.error(f"Failed to send cancellation notice to {chat_id}: {e}")
+        return
+
+    current_dates_set = {item["date"] for item in data}
+    current_seats_map = {item["date"]: item["seats"] for item in data}
+
+    for chat_id, monitor in all_monitors.items():
+        await reset_error_counter(chat_id)
+        mode = monitor.get("mode")
+
+        if mode == "single":
+            target_date = monitor.get("target_date")
+            last_seats = monitor.get("last_seats")
+            cached_snapshot = set(monitor.get("cached_snapshot", []))
+
+            # بررسی تغییر ظرفیت تاریخ انتخابی
+            if target_date in current_seats_map:
+                new_seats = current_seats_map[target_date]
+                if new_seats != last_seats:
+                    t_tehran = convert_sydney_str_to_tehran_info(target_date)
+                    msg = (
+                        f"🚨 <b>تغییر ظرفیت تاریخ پایش‌شده!</b>\n\n"
+                        f"📅 <b>تاریخ:</b> {html.escape(target_date)}\n"
+                        f"⏰ <b>معادل تهران:</b> {html.escape(t_tehran)}\n"
+                        f"💺 <b>ظرفیت قبلی:</b> {html.escape(last_seats)}\n"
+                        f"💺 <b>ظرفیت جدید:</b> {html.escape(new_seats)}"
+                    )
+                    await send_alert(context.application, chat_id, msg)
+                    await save_monitor(
+                        chat_id=chat_id,
+                        username=monitor.get("username", ""),
+                        mode="single",
+                        target_date=target_date,
+                        last_seats=new_seats,
+                        cached_snapshot=",".join(current_dates_set),
+                    )
+
+            # بررسی باز شدن تاریخ جدید در سایت
+            new_opened = current_dates_set - cached_snapshot
+            if new_opened:
+                new_dates_str = []
+                for nd in new_opened:
+                    t_tehran = convert_sydney_str_to_tehran_info(nd)
+                    s_count = current_seats_map.get(nd, "نامشخص")
+                    new_dates_str.append(
+                        f"• 📅 {html.escape(nd)} (💺 {html.escape(s_count)})\n  ⏰ <i>{html.escape(t_tehran)}</i>"
+                    )
+
+                msg = (
+                    f"🎉 <b>تاریخ‌های جدید در سایت باز شدند!</b>\n\n"
+                    + "\n".join(new_dates_str)
+                )
+                await send_alert(context.application, chat_id, msg)
+                await save_monitor(
+                    chat_id=chat_id,
+                    username=monitor.get("username", ""),
+                    mode="single",
+                    target_date=target_date,
+                    last_seats=current_seats_map.get(target_date, last_seats),
+                    cached_snapshot=",".join(current_dates_set),
+                )
+
+        elif mode == "multi":
+            selected_dates = monitor.get("selected_dates", [])
+            last_seats_str = monitor.get("last_seats", "")
+
+            # تبدیل آخرین ظرفیت‌های ذخیره‌شده به دیکشنری
+            old_seats_map = {}
+            if last_seats_str:
+                parts = last_seats_str.split(" | ")
+                for p in parts:
+                    if ":" in p:
+                        k, v = p.split(":", 1)
+                        old_seats_map[k] = v
+
+            changed = False
+            changes_msg = []
+
+            for d in selected_dates:
+                if d in current_seats_map:
+                    curr_s = current_seats_map[d]
+                    prev_s = old_seats_map.get(d, "")
+                    if curr_s != prev_s:
+                        changed = True
+                        t_tehran = convert_sydney_str_to_tehran_info(d)
+                        changes_msg.append(
+                            f"• 📅 {html.escape(d)}:\n  💺 ظرفیت قبلی: {html.escape(prev_s)} 👈 <b>جدید: {html.escape(curr_s)}</b>\n  ⏰ <i>{html.escape(t_tehran)}</i>"
+                        )
+
+            if changed:
+                new_last_seats = " | ".join(
+                    [
+                        f"{d}:{current_seats_map.get(d, '')}"
+                        for d in selected_dates
+                    ]
+                )
+                msg = (
+                    f"🚨 <b>تغییر ظرفیت در تاریخ‌های چندتایی پایش‌شده!</b>\n\n"
+                    + "\n\n".join(changes_msg)
+                )
+                await send_alert(context.application, chat_id, msg)
+                await save_monitor(
+                    chat_id=chat_id,
+                    username=monitor.get("username", ""),
+                    mode="multi",
+                    selected_dates=",".join(selected_dates),
+                    last_seats=new_last_seats,
+                )
+
+
+# ==================== تابع اصلی و اجرا ====================
+async def main_async():
+    await init_db()
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & filters.Regex(
+                r"^(🔙 برگشت به منوی اصلی|↩️ برگشت به صفحه قبل| برگشت به منوی اصلی| برگشت به صفحه قبل)$"
+            ),
+            handle_text_buttons,
+        )
+    )
+    app.add_handler(CallbackQueryHandler(button_click))
+
+    # افزودن Job پایش ۵ دقیقه‌ای
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            scheduled_monitor_job, interval=300, first=10
+        )
+
+    logging.info("Bot is fully initialized and starting polling...")
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling()
+
+    # بیدار نگه‌داشتن گام‌های اجرای برنامه
+    while True:
+        await asyncio.sleep(3600)
+
+
+def main():
+    try:
+        asyncio.run(main_async())
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
+    except Exception as e:
+        logging.critical(f"Critical Bot failure: {e}")
+
+
+if __name__ == "__main__":
+    main()
