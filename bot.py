@@ -556,7 +556,7 @@ class StatusTracker:
             pass
 
 
-# ==================== دریافت داده‌ها از NAATI (اصلاح روش فیلتر) ====================
+# ==================== دریافت داده‌ها از NAATI (اصلاح شده) ====================
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
@@ -573,53 +573,58 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                     "--disable-gpu",
                 ],
             )
-            context = await browser.new_context()
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
             page = await context.new_page()
-
+            
             if tracker:
                 await tracker.update("شروع مرورگر", "success")
                 await tracker.update("اتصال به NAATI", "in_progress")
-
+                
             await page.goto(
                 "https://www.naati.com.au/test-date/",
-                wait_until="domcontentloaded",
+                wait_until="networkidle",
                 timeout=45000,
             )
-
+            
             if tracker:
                 await tracker.update("اتصال به NAATI", "success")
                 await tracker.update("فیلتر آزمون CCL", "in_progress")
-
-            # ۱. انتخاب آزمون CCL با استفاده از ساختار مطمئن کد اصلی
-            await page.wait_for_selector("select", timeout=20000)
-            selects = page.locator("select")
-
-            # انتخاب نوع آزمون
-            await selects.nth(0).select_option(label="Credentialed Community Language Test")
-            await page.wait_for_timeout(1500)
-
+                
+            # انتخاب آزمون CCL
+            type_select = page.locator("select").nth(0)
+            await type_select.wait_for(state="visible", timeout=15000)
+            await type_select.select_option(label="Credentialed Community Language Test")
+            
             if tracker:
                 await tracker.update("فیلتر آزمون CCL", "success")
                 await tracker.update("فیلتر زبان Persian", "in_progress")
-
-            # ۲. انتخاب زبان Persian با روش ترکیبی بر اساس متن یا Value جهت جلوگیری از Timeout
-            language_select = selects.nth(1)
-            try:
-                await language_select.select_option(label="Persian", timeout=10000)
-            except Exception:
-                # پشتیبانی متقاطع در صورت جاوااسکریپت داینامیک
-                await language_select.select_option(value="Persian", timeout=10000)
-
+            
+            # منتظر ماندن برای فعال شدن دراپ‌داون زبان (حذف حالت disabled)
+            lang_select = page.locator("select").nth(1)
+            await lang_select.wait_for(state="attached", timeout=15000)
+            
+            # انتظار تا زمانی که منو از حالت disabled خارج شود
+            await page.wait_for_function(
+                "sel => !sel.disabled", 
+                arg=await lang_select.element_handle(), 
+                timeout=15000
+            )
+            
+            # انتخاب زبان Persian
+            await lang_select.select_option(label="Persian")
+            
+            # انتظار برای بارگذاری جدول نتایج
             await page.wait_for_timeout(2000)
-
+            
             if tracker:
                 await tracker.update("فیلتر زبان Persian", "success")
                 await tracker.update("استخراج جدول", "in_progress")
-
-            # ۳. انتظار برای بارگذاری جدول تاریخ‌ها
+                
             await page.wait_for_selector("table tbody tr", timeout=15000)
             rows = await page.query_selector_all("table tbody tr")
-
+            
             all_dates = []
             for row in rows:
                 cells = await row.query_selector_all("td")
@@ -631,19 +636,17 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                         (await cells[3].inner_text()).strip().replace("\n", " ")
                     )
                     seats = (await cells[4].inner_text()).strip()
+                    all_dates.append({
+                        "test_type": test_type,
+                        "language": lang,
+                        "location": loc,
+                        "date": raw_date,
+                        "seats": seats,
+                    })
                     
-                    # استخراج فقط در صورتی که زبان فارسی یا CCL باشد
-                    if "persian" in lang.lower() or "credentialed" in test_type.lower():
-                        all_dates.append({
-                            "test_type": test_type,
-                            "language": lang,
-                            "location": loc,
-                            "date": raw_date,
-                            "seats": seats,
-                        })
-
             if tracker:
                 await tracker.update("استخراج جدول", "success")
+                
             return all_dates, None
 
         except Exception as e:
@@ -657,12 +660,12 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                 )
                 await tracker.update(last_step_text, "failed", error_details)
             return None, error_details
+            
         finally:
             if context:
                 await context.close()
             if browser:
                 await browser.close()
-
 
 def is_match(user_input, site_text):
     if not user_input or not site_text:
