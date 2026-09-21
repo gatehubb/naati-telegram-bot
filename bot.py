@@ -474,7 +474,7 @@ class StatusTracker:
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
-            await tracker.update("شروع فرآیند بررسی", "in_progress")
+            await tracker.update("شروع فرآیند بررسی سایت ناتی", "in_progress")
         browser = None
         context = None
         try:
@@ -490,16 +490,16 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             context = await browser.new_context()
             page = await context.new_page()
             if tracker:
-                await tracker.update("شروع فرآیند بررسی", "success")
-                await tracker.update("بررسی سایت", "in_progress")
+                await tracker.update("شروع فرآیند بررسی سایت ناتی", "success")
+                await tracker.update("شروع پردازش", "in_progress")
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="networkidle",
                 timeout=45000,
             )
             if tracker:
-                await tracker.update("برقراری اتصال پایدار", "success")
-                await tracker.update("تحلیل داده‌ها", "in_progress")
+                await tracker.update("شروع پردازش", "success")
+                await tracker.update("پردازش ظرفیت‌ها", "in_progress")
             selects = page.locator("select")
             await selects.nth(0).wait_for(timeout=10000)
             await selects.nth(0).select_option(
@@ -507,12 +507,12 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             )
             await page.wait_for_timeout(1000)
             if tracker:
-                await tracker.update("برقراری اتصال پایدار", "success")
-                await tracker.update("تحلیل داده‌های موجود", "in_progress")
+                await tracker.update("پردازش ظرفیت‌ها ", "success")
+                await tracker.update("تبدیل تاریخ  و فارسی سازی ظرفیت‌ها", "in_progress")
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
-                await tracker.update("تحلیل داده‌های موجود", "success")
+                await tracker.update("تبدیل تاریخ  و فارسی سازی ظرفیت‌ها", "success")
                 await tracker.update("آماده سازی نتایج جهت نمایش", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
