@@ -474,7 +474,7 @@ class StatusTracker:
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
-            await tracker.update("شروع مرورگر", "in_progress")
+            await tracker.update("شروع پردازش", "in_progress")
         browser = None
         context = None
         try:
@@ -490,16 +490,16 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             context = await browser.new_context()
             page = await context.new_page()
             if tracker:
-                await tracker.update("شروع مرورگر", "success")
-                await tracker.update("اتصال به NAATI", "in_progress")
+                await tracker.update("شروع پردازش", "success")
+                await tracker.update("بررسی سایت", "in_progress")
             await page.goto(
                 "https://www.naati.com.au/test-date/",
                 wait_until="networkidle",
                 timeout=45000,
             )
             if tracker:
-                await tracker.update("اتصال به NAATI", "success")
-                await tracker.update("فیلتر آزمون CCL", "in_progress")
+                await tracker.update("برقراری اتصال پایدار", "success")
+                await tracker.update("تحلیل داده‌ها", "in_progress")
             selects = page.locator("select")
             await selects.nth(0).wait_for(timeout=10000)
             await selects.nth(0).select_option(
@@ -507,13 +507,13 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             )
             await page.wait_for_timeout(1000)
             if tracker:
-                await tracker.update("فیلتر آزمون CCL", "success")
-                await tracker.update("فیلتر زبان Persian", "in_progress")
+                await tracker.update("برقراری اتصال پایدار", "success")
+                await tracker.update("تحلیل داده‌های موجود", "in_progress")
             await selects.nth(1).select_option(label="Persian")
             await page.wait_for_timeout(1500)
             if tracker:
-                await tracker.update("فیلتر زبان Persian", "success")
-                await tracker.update("استخراج جدول", "in_progress")
+                await tracker.update("تحلیل داده‌های موجود", "success")
+                await tracker.update("آماده سازی نتایج جهت نمایش", "in_progress")
             await page.wait_for_selector("table tbody tr", timeout=10000)
             rows = await page.query_selector_all("table tbody tr")
             all_dates = []
@@ -535,7 +535,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
                         "seats": seats,
                     })
             if tracker:
-                await tracker.update("استخراج جدول", "success")
+                await tracker.update("آماده سازی نتایج جهت نمایش", "success")
             return all_dates, None
         except Exception as e:
             error_details = str(e)
