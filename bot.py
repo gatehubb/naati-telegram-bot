@@ -474,7 +474,7 @@ class StatusTracker:
 async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
     async with async_playwright() as p:
         if tracker:
-            await tracker.update("شروع پردازش", "in_progress")
+            await tracker.update("شروع فرآیند بررسی", "in_progress")
         browser = None
         context = None
         try:
@@ -490,7 +490,7 @@ async def fetch_filtered_naati_dates(tracker: StatusTracker = None):
             context = await browser.new_context()
             page = await context.new_page()
             if tracker:
-                await tracker.update("شروع پردازش", "success")
+                await tracker.update("شروع فرآیند بررسی", "success")
                 await tracker.update("بررسی سایت", "in_progress")
             await page.goto(
                 "https://www.naati.com.au/test-date/",
@@ -682,7 +682,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         status_msg = await context.bot.send_message(
             chat_id,
-            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع مرورگر",
+            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع فرآیند بررسی",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
@@ -731,7 +731,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_msg_id = query.message.message_id
         status_msg = await context.bot.send_message(
             chat_id,
-            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع مرورگر",
+            "⚙️ <b>وضعیت پردازش:</b>\n<i>(این عملیات ممکن است حدود ۱ دقیقه زمان ببرد، لطفاً منتظر بمانید...)</i>\n\n⏳ شروع فرآیند بررسی",
             parse_mode="HTML",
         )
         tracker = StatusTracker(status_msg)
